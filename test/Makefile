@@ -44,7 +44,9 @@ COCOTB_TEST_MODULES = test
 include $(shell cocotb-config --makefiles)/Makefile.sim
 
 # Gate level simulation helper. The PDK's sequential cells take their inputs
-# from the delayed_* outputs of $setuphold/$recrem timing checks, which Icarus
-# leaves undriven, so every flop stays X. Generate a functional copy that uses the inputs directly.
+# from the delayed_* outputs of $setuphold/$recrem timing checks. Icarus 12
+# leaves these undriven (every flop stays X), and Icarus 13 crashes if they are
+# just renamed to the cell inputs while the timing checks remain. Generate a functional copy with the specify blocks removed and
+# the cells wired to their inputs directly, which works on both.
 $(PWD)/sg13cmos5l_stdcell_func.v: $(PDK_ROOT)/ihp-sg13cmos5l/libs.ref/sg13cmos5l_stdcell/verilog/sg13cmos5l_stdcell.v
-	perl -pe 's/\bdelayed_(\w+)/$$1/g' $< > $@
+	perl -0pe 's/\bspecify\b.*?\bendspecify\b//gs; s/\bdelayed_(\w+)/$$1/g' $< > $@
