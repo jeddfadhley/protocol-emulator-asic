@@ -1,89 +1,78 @@
-# SPDX-FileCopyrightText: © 2024 Tiny Tapeout
 # SPDX-License-Identifier: Apache-2.0
+"""Top-level tests: the whole chip, driven through its SPI host interface.
+
+Every protocol scenario from sw/pemu/scenarios.py runs here against real
+firmware and device models; the same tests run on the gate-level netlist.
+"""
+
+import random
 
 import cocotb
-from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
 
-CLK_PERIOD_NS = 20  # 50 MHz
-CLKS_PER_BIT = 434  # 115200 baud
-TX_BIT = 4  # uo_out[4]
-MESSAGE = b"Hello, world!\r\n"
+from pemu.model import A_FLAGS, A_ID, A_PIN_OE, A_PIN_OUT, CHIP_ID
+from pemu.scenarios import SCENARIOS
+from rtl_bench import RtlBench
 
 
-def tx(dut):
-    return (int(dut.uo_out.value) >> TX_BIT) & 1
-
-
-async def reset(dut):
-    clock = Clock(dut.clk, CLK_PERIOD_NS, unit="ns")
-    cocotb.start_soon(clock.start())
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 10)
-    dut.rst_n.value = 1
-
-
-async def uart_receive_byte(dut):
-    """Wait for a start bit, then sample each bit at its centre."""
-    while tx(dut) != 0:
-        await FallingEdge(dut.clk)
-
-    await ClockCycles(dut.clk, CLKS_PER_BIT // 2, rising=False)
-    assert tx(dut) == 0, "start bit not low at centre"
-
-    value = 0
-    for i in range(8):
-        await ClockCycles(dut.clk, CLKS_PER_BIT, rising=False)
-        value |= tx(dut) << i
-
-    await ClockCycles(dut.clk, CLKS_PER_BIT, rising=False)
-    assert tx(dut) == 1, "stop bit not high (framing error)"
-    return value
+async def bench(dut):
+    b = RtlBench(dut)
+    await b.start_clock()
+    return b
 
 
 @cocotb.test()
-async def test_idle_high_in_reset(dut):
-    clock = Clock(dut.clk, CLK_PERIOD_NS, unit="ns")
-    cocotb.start_soon(clock.start())
-    dut.ena.value = 1
-    dut.ui_in.value = 0
-    dut.uio_in.value = 0
-    dut.rst_n.value = 0
-    await ClockCycles(dut.clk, 5)
-    assert tx(dut) == 1
-    assert int(dut.uo_out.value) & ~(1 << TX_BIT) == 0, "unused outputs must be 0"
+async def test_reset_state(dut):
+    """Outputs are quiet after reset; host pins read back the chip ID."""
+    b = await bench(dut)
     assert int(dut.uio_oe.value) == 0
+    assert int(dut.uio_out.value) == 0
+    assert int(dut.uo_out.value) & 0x7F == 0
+    assert await b.read(A_ID) == CHIP_ID
 
 
 @cocotb.test()
-async def test_uart_message(dut):
-    await reset(dut)
-
-    # Receive twice the message length so we check it repeats correctly.
-    received = bytearray()
-    for _ in range(2 * len(MESSAGE)):
-        received.append(await uart_receive_byte(dut))
-
-    dut._log.info(f"Received: {bytes(received)!r}")
-    assert bytes(received) == MESSAGE * 2
+async def test_spi_registers(dut):
+    """Register write/read, burst auto-increment, and instruction memory."""
+    b = await bench(dut)
+    await b.write(A_FLAGS, 0xA5)
+    assert await b.read(A_FLAGS) == 0xA5
+    rng = random.Random(7)
+    words = [rng.randrange(1 << 16) for _ in range(64)]
+    await b.write_burst(0, words)
+    assert await b.read_burst(0, 64) == words
+    # A burst crosses from PIN_OUT into PIN_OE
+    await b.write_burst(A_PIN_OUT, [0x1234, 0x00F0])
+    assert await b.read_burst(A_PIN_OUT, 2) == [0x1234, 0x00F0]
+    assert int(dut.uio_oe.value) == 0xF0
+    assert int(dut.uio_out.value) == 0x34
+    assert int(dut.uo_out.value) & 0x7F == 0x12
 
 
 @cocotb.test()
-async def test_uart_bit_period(dut):
-    """Bit timing is exact: the first low run of "H" lasts exactly 4 bit periods."""
-    await reset(dut)
+async def test_fifo_port_burst(dut):
+    """Bursts at a FIFO port stay on the port (no address increment)."""
+    b = await bench(dut)
+    # Engine 0, loopback-free: an IN/PUSH program is not needed; use the TX
+    # FIFO -> OSR -> ISR path with a two-instruction program:
+    #   pull ; mov isr, osr ; push   (wraps)
+    from pemu import assemble, EngineConfig
+    prog = assemble("pull\nmov isr, osr\npush")
+    await b.setup(0, prog, 0, EngineConfig())
+    await b.write_burst(0x4F, [0x1111, 0x2222, 0x3333])
+    await b.start(1)
+    await b.run(50)
+    assert await b.read_burst(0x4F, 3) == [0x1111, 0x2222, 0x3333]
 
-    # First char is 'H' = 0x48 = 0b01001000, sent LSB first after the start bit:
-    # start(0) 0 0 0 1 0 0 1 0 stop(1). Low run from start bit through bit 2 is 4 bits.
-    await FallingEdge(dut.clk)
-    while tx(dut) != 0:
-        await FallingEdge(dut.clk)
-    cycles = 0
-    while tx(dut) == 0:
-        await RisingEdge(dut.clk)
-        await FallingEdge(dut.clk)
-        cycles += 1
-    assert cycles == 4 * CLKS_PER_BIT, f"low run was {cycles} cycles"
+
+def _scenario_test(scenario):
+    async def run(dut):
+        b = await bench(dut)
+        await scenario(b)
+
+    run.__name__ = run.__qualname__ = f"test_{scenario.__name__}"
+    run.__doc__ = scenario.__doc__
+    return cocotb.test()(run)
+
+
+for _s in SCENARIOS:
+    globals()[f"test_{_s.__name__}"] = _scenario_test(_s)

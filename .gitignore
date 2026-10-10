@@ -13,3 +13,8 @@ test/results.xml
 test/gate_level_netlist.v
 test/output/
 test/sg13cmos5l_stdcell_func.v
+test/tb_core.fst
+test/sim_build_core
+formal/build/
+__pycache__/
+.pytest_cache/

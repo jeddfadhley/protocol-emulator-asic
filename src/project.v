@@ -5,9 +5,15 @@
 
 `default_nettype none
 
-// Milestone 0: repeatedly transmit a hard-coded message over UART TX
-// (115200 8N1 at a 50 MHz clock) on uo_out[4], the Tiny Tapeout
-// convention for UART TX.
+// PEMU: a programmable protocol emulator. Two engines run firmware that
+// drives and samples pins with cycle-exact timing. A host loads programs
+// and moves data over SPI. See docs/isa.md.
+//
+// Pins:
+//   uio[7:0]   engine pins 0-7 (bidirectional)
+//   uo_out[6:0] engine pins 8-14 (outputs)
+//   ui_in[7:0]  engine pins 8-15 (inputs)
+//   ui_in[4] host CS_N, ui_in[5] host SCK, ui_in[6] host MOSI, uo_out[7] host MISO
 module tt_um_jeddfadhley_protocol_emu (
     input  wire [7:0] ui_in,    // Dedicated inputs
     output wire [7:0] uo_out,   // Dedicated outputs
@@ -19,65 +25,45 @@ module tt_um_jeddfadhley_protocol_emu (
     input  wire       rst_n     // reset_n - low to reset
 );
 
-  localparam MSG_LEN = 15;  // "Hello, world!\r\n"
+  wire        bus_we, bus_re, bus_rc;
+  wire [6:0]  bus_addr;
+  wire [15:0] bus_wdata, bus_rdata;
+  wire [15:0] pin_out, pin_oe;
+  wire        miso;
 
-  reg  [3:0] idx;
-  reg  [7:0] char;
-  wire       busy;
-  wire       tx;
-  reg        start;
-
-  always @(*) begin
-    case (idx)
-      4'd0:    char = "H";
-      4'd1:    char = "e";
-      4'd2:    char = "l";
-      4'd3:    char = "l";
-      4'd4:    char = "o";
-      4'd5:    char = ",";
-      4'd6:    char = " ";
-      4'd7:    char = "w";
-      4'd8:    char = "o";
-      4'd9:    char = "r";
-      4'd10:   char = "l";
-      4'd11:   char = "d";
-      4'd12:   char = "!";
-      4'd13:   char = 8'h0D;
-      default: char = 8'h0A;
-    endcase
-  end
-
-  // Issue one start pulse per character, then advance once the
-  // transmitter has picked it up.
-  always @(posedge clk) begin
-    if (!rst_n) begin
-      idx   <= 0;
-      start <= 1'b0;
-    end else if (start) begin
-      start <= 1'b0;
-      idx   <= (idx == MSG_LEN - 1) ? 4'd0 : idx + 1'b1;
-    end else if (!busy) begin
-      start <= 1'b1;
-    end
-  end
-
-  uart_tx #(
-      .CLKS_PER_BIT(434)
-  ) u_tx (
-      .clk  (clk),
-      .rst_n(rst_n),
-      .start(start),
-      .data (char),
-      .tx   (tx),
-      .busy (busy)
+  pe_spi u_spi (
+      .clk      (clk),
+      .rst_n    (rst_n),
+      .cs_n_in  (ui_in[4]),
+      .sck_in   (ui_in[5]),
+      .mosi_in  (ui_in[6]),
+      .miso     (miso),
+      .bus_we   (bus_we),
+      .bus_re   (bus_re),
+      .bus_rc   (bus_rc),
+      .bus_addr (bus_addr),
+      .bus_wdata(bus_wdata),
+      .bus_rdata(bus_rdata)
   );
 
-  // All output pins must be assigned. If not used, assign to 0.
-  assign uo_out  = {3'b000, tx, 4'b0000};
-  assign uio_out = 0;
-  assign uio_oe  = 0;
+  pe_core u_core (
+      .clk      (clk),
+      .rst_n    (rst_n),
+      .pins_ext ({ui_in, uio_in}),
+      .pin_out  (pin_out),
+      .pin_oe   (pin_oe),
+      .bus_we   (bus_we),
+      .bus_re   (bus_re),
+      .bus_rc   (bus_rc),
+      .bus_addr (bus_addr),
+      .bus_wdata(bus_wdata),
+      .bus_rdata(bus_rdata)
+  );
 
-  // List all unused inputs to prevent warnings
-  wire _unused = &{ena, ui_in, uio_in, 1'b0};
+  assign uo_out  = {miso, pin_out[14:8]};
+  assign uio_out = pin_out[7:0];
+  assign uio_oe  = pin_oe[7:0];
+
+  wire _unused = &{ena, pin_out[15], pin_oe[15:8], 1'b0};
 
 endmodule
