@@ -167,3 +167,79 @@ def manchester(bits):
     for b in bits:
         out += [1 - b, b]
     return out
+
+
+# ----- a tiny network stack: ARP, ping and UDP echo -----
+# The chip moves the bits; the host answers. With these, a laptop with a
+# static IP can `ping` the chip and get UDP datagrams echoed back.
+
+ETH_ARP = 0x0806
+DEFAULT_MAC = b"\x02PEMU\x01"       # locally administered
+DEFAULT_IP = (192, 168, 7, 2)
+
+
+def arp_request(src_mac, src_ip, target_ip):
+    body = (b"\x00\x01\x08\x00\x06\x04\x00\x01" + bytes(src_mac) + bytes(src_ip)
+            + bytes(6) + bytes(target_ip))
+    return ethernet(BROADCAST, src_mac, ETH_ARP, body)
+
+
+def icmp_echo_request(src_mac, dst_mac, src_ip, dst_ip, ident=1, seq=1, data=b"pemu-ping"):
+    msg = bytearray([8, 0, 0, 0, ident >> 8, ident & 0xFF, seq >> 8, seq & 0xFF]) + bytes(data)
+    c = _csum(bytes(msg))
+    msg[2], msg[3] = c >> 8, c & 0xFF
+    return ethernet(dst_mac, src_mac, ETH_IPV4, ipv4(src_ip, dst_ip, 1, bytes(msg)))
+
+
+def respond(frame, mac=DEFAULT_MAC, ip=DEFAULT_IP):
+    """The reply to a received frame (without FCS), or None.
+
+    Answers ARP requests for `ip`, ICMP echo requests (ping) to `ip`, and
+    UDP datagrams to `ip` port 7 (echo)."""
+    f = bytes(frame)
+    ip = bytes(ip)
+    if len(f) < 42 or (f[0:6] != bytes(mac) and f[0:6] != BROADCAST):
+        return None
+    etype = f[12] << 8 | f[13]
+    if etype == ETH_ARP:
+        if f[14:22] != b"\x00\x01\x08\x00\x06\x04\x00\x01" or f[38:42] != ip:
+            return None
+        sender_mac, sender_ip = f[22:28], f[28:32]
+        body = (b"\x00\x01\x08\x00\x06\x04\x00\x02" + bytes(mac) + ip + sender_mac + sender_ip)
+        return ethernet(sender_mac, mac, ETH_ARP, body)
+    if etype != ETH_IPV4 or f[14] >> 4 != 4 or f[30:34] != ip:
+        return None
+    ihl = (f[14] & 15) * 4
+    total = f[16] << 8 | f[17]
+    if _csum(f[14:14 + ihl]) != 0 or total > len(f) - 14:
+        return None
+    src_ip = f[26:30]
+    payload = f[14 + ihl:14 + total]
+    proto = f[23]
+    if proto == 1 and len(payload) >= 8 and payload[0] == 8:  # ICMP echo request
+        msg = bytearray(payload)
+        msg[0] = 0  # echo reply
+        msg[2] = msg[3] = 0
+        c = _csum(bytes(msg))
+        msg[2], msg[3] = c >> 8, c & 0xFF
+        return ethernet(f[6:12], mac, ETH_IPV4, ipv4(ip, src_ip, 1, bytes(msg)))
+    if proto == 17 and len(payload) >= 8:
+        sport, dport = payload[0] << 8 | payload[1], payload[2] << 8 | payload[3]
+        length = payload[4] << 8 | payload[5]
+        if dport == 7:
+            return ethernet(f[6:12], mac, ETH_IPV4,
+                            ipv4(ip, src_ip, 17, udp(ip, src_ip, 7, sport, payload[8:length])))
+    return None
+
+
+def parse_icmp_echo(frame):
+    """(type, ident, seq, data) of an ICMP echo frame, checking checksums."""
+    f = bytes(frame)
+    if len(f) < 42 or f[12:14] != b"\x08\x00" or f[23] != 1:
+        return None
+    ihl = (f[14] & 15) * 4
+    total = f[16] << 8 | f[17]
+    msg = f[14 + ihl:14 + total]
+    if _csum(f[14:14 + ihl]) != 0 or _csum(msg) != 0:
+        return None
+    return msg[0], msg[4] << 8 | msg[5], msg[6] << 8 | msg[7], msg[8:]

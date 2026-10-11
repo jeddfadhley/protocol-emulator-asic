@@ -3,7 +3,7 @@ project:
   title:        "Protocol Emulator"      # Project title
   author:       "Jedd Fadhley"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "Programmable protocol emulator: two cycle-exact pin engines run UART/SPI/I2C/WS2812 firmware"      # One line description of what your project does
+  description:  "Programmable protocol emulator: cycle-exact pin engines + DMA run UART/SPI/I2C/USB/10BASE-T Ethernet firmware"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     50000000      # Clock frequency in Hz (or 0 if not applicable)
 
@@ -28,7 +28,7 @@ project:
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: "IN8 (engine input)"
+  ui[0]: "IN8 (engine input, Ethernet RX by convention)"
   ui[1]: "IN9 (engine input)"
   ui[2]: "IN10 (engine input)"
   ui[3]: "IN11 (engine input, UART RX by convention)"
@@ -48,8 +48,8 @@ pinout:
   uo[7]: "HOST_MISO"
 
   # Bidirectional pins
-  uio[0]: "GPIO0 (engine pin, bidirectional)"
-  uio[1]: "GPIO1 (engine pin, bidirectional)"
+  uio[0]: "GPIO0 (engine pin, Ethernet TD+ by convention)"
+  uio[1]: "GPIO1 (engine pin, Ethernet TD- by convention)"
   uio[2]: "GPIO2 (engine pin, bidirectional)"
   uio[3]: "GPIO3 (engine pin, bidirectional)"
   uio[4]: "GPIO4 (engine pin, bidirectional)"

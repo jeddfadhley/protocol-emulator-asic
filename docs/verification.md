@@ -15,7 +15,7 @@ and every layer runs in CI on each push (`.github/workflows/test.yaml`).
  (model)                       │      RTL driven through its real SPI pins
                                │
                      formal proofs (BMC + k-induction)
-                     mutation testing (25 planted bugs)
+                     mutation testing (37 planted bugs)
                      gate-level re-run of the chip tests (CI)
 ```
 
@@ -35,15 +35,20 @@ levels and sticky flags.
 - **Constrained random:** each seed fills instruction memory with random
   instructions (three opcode mixes: mixed, data-path heavy, control heavy),
   randomises all configuration, toggles input pins and issues random host
-  traffic. That traffic includes FIFO pushes and pops, aborted reads, and
-  CTRL pulses for restart, step and flush. Every 16-bit word is a legal
+  traffic. That traffic includes FIFO pushes and pops, aborted reads, CTRL
+  pulses for restart, step and flush, packet RAM reads and writes, and DMA
+  transfers in both directions on both channels. The packet RAM contents
+  are compared too. Every 16-bit word is a legal
   instruction, so random programs exercise the whole encoding space,
   reserved encodings included.
 - **Directed sweep:** small loops cover every IN/OUT bit count
   (1, 2, 3, 5, 8, 15, 16) against every push/pull threshold, for both
   autopush/autopull and the explicit `iffull`/`ifempty` forms.
-- CI runs 150 random seeds x 3000 clocks plus the directed sweep, about
-  600,000 compared clocks. Local runs of 200+ seeds have passed.
+- **Feature programs:** edge and any-edge waits on fast-toggling pins, and
+  differential pairs written by every path (SET, MOV, OUT, side-set, values
+  and directions).
+- CI runs 150 random seeds x 3000 clocks plus the directed programs, about
+  700,000 compared clocks. Local runs of 200+ seeds have passed.
 
 ```
 cd test && make TB=core COSIM_SEEDS=200 COSIM_CYCLES=3000
@@ -78,6 +83,14 @@ Each scenario runs twice with identical code:
 | `edge_stamp` | edge timestamps differ by exactly the input pulse widths |
 | `single_step` | debug stepping with PC visible after every tick |
 | `usb_ls_tx` | SETUP, DATA0 (GET_DESCRIPTOR), ACK, stuffed DATA1 at exactly 1.5 Mbit/s |
+| `eth_loopback` | a 10BASE-T frame from engine 0 to engine 1 on-chip, FCS intact |
+| `eth_tx` | every bit exactly 2 + 3 clocks, preamble, TP_IDL, link pulse width and spacing |
+| `eth_rx`, `eth_rx_drift` | frames from an independent clock: phase, +100 ppm, jitter, link pulses, oversize frame |
+| `eth_ping` | a laptop model sends ARP and ping; the host code answers through the chip |
+
+The Ethernet receiver also has a tolerance test: every sender clock phase,
+±2000 ppm, ±4 ns of jitter on every edge, all frames must arrive intact
+([ethernet.md](ethernet.md)).
 
 ## 4. Formal proofs (`formal/run.sh`)
 
@@ -100,6 +113,15 @@ Engine:
 - TIME counts ticks exactly, and the clock divider spaces ticks
   `CLKDIV + 1` clocks apart.
 
+DMA (`pe_dma`):
+- it never pushes a full FIFO or pops an empty one, and never collides with
+  the host on the same FIFO or the RAM write port;
+- at most one transfer per clock, channel 0 first, and each transfer moves
+  its channel by exactly one word.
+
+Inside the engine these DMA guarantees are assumptions, so the engine's own
+FIFO safety proof still covers every source of pushes and pops.
+
 FIFO:
 - data comes out in the order it went in. One arbitrary word is tracked
   through the FIFO, with an induction-strengthening invariant on storage;
@@ -111,13 +133,18 @@ assumed. It is assumed only when the FIFO is checked on its own.
 ## 5. Mutation testing (`test/mutate.py`)
 
 Mutation testing asks whether the tests would notice a bug. The script
-plants 25 realistic bugs, one at a time, and reruns the relevant tests. The
+plants 37 realistic bugs, one at a time, and reruns the relevant tests. The
 bugs include an off-by-one in a threshold, a missing decrement, a wrong CRC
 tap, a missing synchronizer stage, broken engine priority, and an SPI pop on
-the wrong clock edge. **All 25 are caught.**
+the wrong clock edge, plus 12 for v2: DMA priority and address bugs, RAM
+port bugs, a differential pin that is not inverted, an any-edge wait
+compared with the wrong level. **All 37 are caught.**
 
 The first run caught 24. The survivor, a PUSH `iffull` off by one, led to the
-directed threshold sweep in section 2.
+directed threshold sweep in section 2. For v2, the first run caught 10 of
+12. The survivors (an any-edge wait compared with the polarity bit, and a
+differential pin whose direction was not mirrored) led to the directed
+feature programs.
 
 ## 6. Physical implementation
 
@@ -154,6 +181,11 @@ clock by recomputing `CLKDIV`.
 - **Shift-count overflow.** `count + n` can reach 32, which does not fit in 5
   bits. Found in model/RTL review; the co-simulation and the formal bounds now
   cover it.
+- **Ethernet receiver timing.** The jitter sweep found that the first
+  `eth_rx` lost about 1 frame in 30 at ±2 ns of jitter. Two hunting paths
+  re-waited 4 clocks after an edge instead of 3, so the receiver could slip
+  onto bit-boundary transitions just as the SFD arrived. Every path now
+  re-waits after exactly 3 clocks.
 - **TIME read semantics.** The model and RTL disagreed on whether an
   instruction sees TIME before or after its own tick. The spec now says
   before, and both implementations follow it.

@@ -217,9 +217,10 @@ module pe_core (
 
   // Packet RAM: one write per clock, from the host port or an RX transfer
   // (pe_dma never does both in the same clock)
+  integer k;
   always @(posedge clk) begin
     if (!rst_n) begin
-      for (i = 0; i < 128; i = i + 1) pram[i] <= 16'h0000;
+      for (k = 0; k < 128; k = k + 1) pram[k] <= 16'h0000;
     end else if (host_ram_we) begin
       pram[ram_addr] <= bus_wdata;
     end else if (dma_ram_we) begin

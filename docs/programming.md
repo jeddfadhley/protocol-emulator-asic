@@ -49,7 +49,8 @@ carry a `side` value, and the delay field shrinks to `5 - n` bits.
 | `jmp [cond,] target` | cond: `!x`, `x--`, `!y`, `y--`, `x!=y`, `pin`, `!osre` |
 | `wait <0\|1> gpio <n> [timeout]` | wait for absolute pin n to reach the level |
 | `wait <0\|1> pin <n> [timeout]` | wait for pin IN_BASE + n |
-| `wait <0\|1> edge <n> [timeout]` | wait for a transition to the level on IN_BASE + n |
+| `wait <0\|1> edge <n> [timeout]` | wait for a transition to the level on IN_BASE + n (n = 0-7) |
+| `wait any edge <n> [timeout]` | wait for any change of IN_BASE + n from the level first seen |
 | `wait <0\|1> flag <n> [timeout]` | wait for event flag n (waiting for 1 also clears it) |
 | `in <src>, <1-16>` | src: `pins x y null crc time isr osr` |
 | `out <dst>, <1-16>` | dst: `pins x y null pindirs pc isr` |
@@ -113,6 +114,16 @@ bit-banged SPI from MicroPython.
   `wait 1 flag`), for example one engine receiving while the other answers.
 - **Loopback mode** (`CTRL.LOOPBACK`) connects the engines to each other's
   outputs, so you can test a protocol pair entirely on-chip.
+- **Bursts at wire speed:** put the data in the packet RAM (`RAM_ADDR`,
+  `RAM_DATA`) and start the engine's DMA channel (`DMA0`/`DMA1`). The DMA
+  keeps the TX FIFO full, or empties the RX FIFO into the RAM, with no host
+  traffic. `eth_tx` and `eth_rx` work this way.
+- **Differential outputs:** set `PINCFG.DIFF` and pin `OUT_BASE + 1` always
+  carries the inverse of `OUT_BASE`, and the same direction.
+- **Re-lock on every edge:** a receiver that runs `wait any edge` before
+  each sample never drifts, however far apart the two clocks are. Restart
+  the wait a fixed number of clocks after each edge to skip transitions you
+  don't want (see `eth_rx.pasm`).
 - **Programs are relocatable.** Jump targets are relative to `ORIGIN`, so the
   same machine code works at any address. The two engines can share code.
 
@@ -127,3 +138,4 @@ bit-banged SPI from MicroPython.
 | `sd_cmd.pasm` | CRC unit generating SD-card CRC7 on the fly |
 | `edge_stamp.pasm` | edge waits plus TIME capture (logic analyser) |
 | `usb_ls_tx.pasm` | USB low-speed packets at exactly 1.5 Mbit/s |
+| `eth_tx.pasm`, `eth_rx.pasm` | 10BASE-T Ethernet: Manchester, link pulses, SFD hunt, DMA ([ethernet.md](ethernet.md)) |

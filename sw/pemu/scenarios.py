@@ -404,6 +404,26 @@ async def eth_rx_drift(b):
     await _eth_rx(b, phase_ns=13.0, ppm=100.0, jitter_ns=3.0)
 
 
+async def eth_ping(b):
+    """A laptop (device models) sends ARP and ping; the chip answers both."""
+    from .ethhost import Station
+    laptop_mac, laptop_ip = b"\xaa\xbb\xcc\x00\x00\x01", (192, 168, 7, 1)
+    requests = [eth.arp_request(laptop_mac, laptop_ip, eth.DEFAULT_IP),
+                eth.icmp_echo_request(laptop_mac, eth.DEFAULT_MAC, laptop_ip, eth.DEFAULT_IP,
+                                      0x1234, 7, bytes(range(56)))]
+    mon = b.monitor(EthMonitor(ETH_TD, ETH_TD + 1))
+    st = Station(b, tx_timeout=4000, nlp_div=1)
+    await st.start()
+    b.ui(EthSource([eth.with_fcs(r) for r in requests], gap_ns=600_000), ETH_RD - 8)
+    await st.serve(frames=2, polls=100_000)
+    await b.run_until(lambda: len(mon.frames) >= 2 or mon.errors, 100_000)
+    assert not mon.errors, mon.errors
+    arp, pong = (f[:-4] for f in mon.frames)
+    assert all(eth.fcs_ok(f) for f in mon.frames)
+    assert arp == eth.with_fcs(eth.respond(requests[0]))[:-4]  # padded to 60 bytes
+    assert eth.parse_icmp_echo(pong) == (0, 0x1234, 7, bytes(range(56)))
+
+
 SCENARIOS = [check_id, uart_tx, uart_tx_timing, uart_rx, uart_loopback, spi, sd_cmd,
              i2c, i2c_timeout, ws2812, edge_stamp, single_step, usb_ls_tx,
-             eth_loopback, eth_tx, eth_rx, eth_rx_drift]
+             eth_loopback, eth_tx, eth_rx, eth_rx_drift, eth_ping]

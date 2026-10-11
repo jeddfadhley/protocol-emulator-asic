@@ -16,9 +16,18 @@ NOTE: the TTBoardSpi adapter targets the Tiny Tapeout MicroPython SDK
 tested against the reference model (sw/tests/test_board_driver.py).
 """
 
-from pemu_demos import CLK_HZ, DEMOS
+from pemu_demos import CLK_HZ, DEMOS, ETH_RX_X
 
-A_CTRL, A_FLAGS, A_PIN_IN, A_PIN_OUT, A_PIN_OE, A_ID, A_PIN_SET, A_PIN_CLR = range(0x60, 0x68)
+try:  # CPython (FPGA host): the package; MicroPython: copy sw/pemu/eth.py as pemu_eth.py
+    from pemu import eth
+except ImportError:
+    try:
+        import pemu_eth as eth
+    except ImportError:
+        eth = None
+
+(A_CTRL, A_FLAGS, A_PIN_IN, A_PIN_OUT, A_PIN_OE, A_ID, A_PIN_SET, A_PIN_CLR,
+ A_RAM_ADDR, A_RAM_DATA, A_DMA0, A_DMA1, A_FLAG_SET, A_FLAG_CLR, A_VERSION) = range(0x60, 0x6F)
 CHIP_ID = 0x5045
 R_STATUS, R_FIFO = 0xD, 0xF
 
@@ -135,6 +144,106 @@ class Pemu:
             if r is not None and r & 1 == 0:
                 found.append(addr)
         return found
+
+
+    # ----- packet RAM and DMA -----
+
+    def ram_write(self, addr, words):
+        self.write(A_RAM_ADDR, addr)
+        for i in range(0, len(words), 32):
+            self.write(A_RAM_DATA, *words[i:i + 32])
+
+    def ram_read(self, addr, n):
+        self.write(A_RAM_ADDR, addr)
+        out = []
+        while len(out) < n:
+            k = min(32, n - len(out))
+            w = self.read(A_RAM_DATA, k)
+            out += [w] if k == 1 else w
+        return out
+
+    def dma(self, channel, addr, count, rx=False):
+        self.write(A_DMA0 + channel, (addr & 127) | (count & 255) << 7 | (0x8000 if rx else 0))
+
+    # ----- 10BASE-T Ethernet (see sw/pemu/ethhost.py for the layout) -----
+
+    ETH_RX_BASE, ETH_TX_BASE, ETH_WORDS = 0, 64, 64
+
+    def eth_start(self, loopback=False):
+        self.write(A_CTRL, 0)
+        self.write(A_FLAG_CLR, 3)
+        _desc, writes, enable, lb, _pins = DEMOS["ETH_LOOPBACK" if loopback else "ETHERNET"]
+        for addr, value in writes:
+            self.write(addr, value)
+        self.dma(1, self.ETH_RX_BASE, self.ETH_WORDS, rx=True)
+        self.write(A_CTRL, enable | (4 if lb else 0) | enable << 4)
+
+    def eth_send(self, frame):
+        """Send a frame (without FCS; it is padded and the FCS added)."""
+        img = eth.tx_image(eth.with_fcs(frame))
+        if len(img) > self.ETH_WORDS:
+            raise ValueError("frame too long")
+        while (self.read(A_DMA0) >> 7) & 255:
+            pass  # previous frame still being fetched
+        self.ram_write(self.ETH_TX_BASE, img)
+        self.dma(0, self.ETH_TX_BASE, len(img))
+        self.write(A_FLAG_SET, 1)
+
+    def eth_recv(self, polls=1):
+        """A received frame (with FCS) or None. Check eth.fcs_ok()."""
+        for _ in range(polls):
+            if self.read(A_FLAGS) & 2:
+                break
+        else:
+            return None
+        end = self.read(A_DMA1) & 127
+        words = self.ram_read(self.ETH_RX_BASE, (end - self.ETH_RX_BASE) % 128)
+        self.write(A_FLAG_CLR, 2)
+        self.dma(1, self.ETH_RX_BASE, self.ETH_WORDS, rx=True)
+        return eth.rx_decode(words, ETH_RX_X)[0]
+
+    def eth_serve(self, mac=None, ip=None, frames=None, polls=None, log=print):
+        """Answer ARP, ping and UDP echo (port 7) until `frames` good frames
+        or `polls` polls (None = forever)."""
+        mac = mac or eth.DEFAULT_MAC
+        ip = ip or eth.DEFAULT_IP
+        seen = n = 0
+        while polls is None or n < polls:
+            n += 1
+            f = self.eth_recv()
+            if f is None or not eth.fcs_ok(f):
+                continue
+            seen += 1
+            reply = eth.respond(f[:-4], mac, ip)
+            if log:
+                log("rx %3d bytes %s -> %s" % (len(f), _ethdesc(f), "reply" if reply else "ignored"))
+            if reply:
+                self.eth_send(reply)
+            if frames is not None and seen >= frames:
+                break
+        return seen
+
+
+def _ethdesc(f):
+    etype = f[12] << 8 | f[13]
+    if etype == 0x0806:
+        return "ARP"
+    if etype == 0x0800 and len(f) > 23:
+        return {1: "ICMP", 6: "TCP", 17: "UDP"}.get(f[23], "IPv4")
+    return "type %04x" % etype
+
+
+def eth_selftest(link=None):
+    """10BASE-T on-chip: engine 0 sends a UDP frame, engine 1 receives it."""
+    chip = Pemu(link or TTBoardSpi())
+    chip.check()
+    chip.eth_start(loopback=True)
+    frame = eth.udp_frame(b"PEMU Ethernet self-test")
+    chip.eth_send(frame)
+    got = chip.eth_recv(polls=2000)
+    ok = got == eth.with_fcs(frame) and eth.fcs_ok(got)
+    print("PEMU Ethernet self-test", "PASSED" if ok else "FAILED: got %r" % (got,))
+    return ok
 
 
 def selftest(link=None):

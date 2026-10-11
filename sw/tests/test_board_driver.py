@@ -11,7 +11,7 @@ import sys
 
 import pytest
 
-from pemu.model import Core
+from pemu.model import Core, is_port
 
 BOARD = os.path.join(os.path.dirname(__file__), "..", "board")
 sys.path.insert(0, BOARD)
@@ -37,7 +37,7 @@ class ModelLink:
                 rx += bytes((w >> 8, w & 0xFF))
             else:
                 self.core.clock(we=True, addr=addr, wdata=payload[i] << 8 | payload[i + 1])
-            if not (addr & 0x60 == 0x40 and addr & 15 == 15):
+            if not is_port(addr):
                 addr = (addr + 1) & 0x7F
         for _ in range(self.idle):
             self.core.clock(ui_in=0xFF, uio_in=0xFF)
@@ -68,3 +68,56 @@ def test_bad_id_raises():
             return bytearray(len(data))
     with pytest.raises(RuntimeError):
         pemu_board.Pemu(Dead()).check()
+
+
+def test_ethernet_selftest_on_model():
+    assert pemu_board.eth_selftest(ModelLink(idle_clocks=50))
+
+
+def test_ethernet_serves_ping_on_model():
+    """The board driver answers a ping that a laptop model sends."""
+    from pemu import eth
+    from pemu.periph import EthMonitor, EthSource, resolve
+
+    class WiredLink(ModelLink):
+        def __init__(self):
+            super().__init__(idle_clocks=50)
+            mac, ip = b"\xaa\xbb\xcc\x00\x00\x01", (192, 168, 7, 1)
+            req = eth.icmp_echo_request(mac, eth.DEFAULT_MAC, ip, eth.DEFAULT_IP, 9, 3, b"hi")
+            self.src = EthSource([eth.with_fcs(req)], start_ns=200_000)
+            self.mon = EthMonitor(0, 1)
+
+        def transfer(self, data):
+            rx = bytearray(1)
+            cmd, payload = data[0], data[1:]
+            addr, rd = cmd & 0x7F, cmd & 0x80
+            for i in range(0, len(payload), 2):
+                if rd:
+                    w = self._clock(re=True, addr=addr)
+                    self._clock(rc=True, addr=addr)
+                    rx += bytes((w >> 8, w & 0xFF))
+                else:
+                    self._clock(we=True, addr=addr, wdata=payload[i] << 8 | payload[i + 1])
+                if not is_port(addr):
+                    addr = (addr + 1) & 0x7F
+            for _ in range(self.idle):
+                self._clock()
+            return rx
+
+        def _clock(self, **kw):
+            c = self.core
+            wires, uio, _ = resolve(c.pin_out, c.pin_oe, 0, 0)
+            self.mon.step(wires)
+            ui = self.src.step(wires)
+            return c.clock(ui_in=ui, uio_in=uio, **kw)
+
+    link = WiredLink()
+    chip = pemu_board.Pemu(link)
+    chip.eth_start()
+    assert chip.eth_serve(frames=1, polls=5000, log=None) == 1
+    for _ in range(20000):
+        if link.mon.frames:
+            break
+        link._clock()
+    assert not link.mon.errors, link.mon.errors
+    assert eth.parse_icmp_echo(link.mon.frames[0][:-4]) == (0, 9, 3, b"hi")
