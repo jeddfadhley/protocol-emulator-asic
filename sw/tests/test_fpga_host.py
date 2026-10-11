@@ -11,7 +11,9 @@ import io
 import pytest
 
 from pemu import fpga
-from pemu.model import Core
+from pemu import eth
+from pemu.model import Core, is_port
+from pemu.periph import EthMonitor, resolve
 
 
 class ModelSpi:
@@ -20,11 +22,15 @@ class ModelSpi:
     def __init__(self):
         self.core = Core()
         self.tx_trace = []           # PEMU pin 12 (UART TX demo) after each idle clock
+        self.eth = EthMonitor(0, 1)  # a link partner on the TD+/TD- pair
 
     def idle(self, clocks):
         for _ in range(clocks):
-            self.core.clock(ui_in=0xFF, uio_in=0xFF)
-            self.tx_trace.append(self.core.pin_out >> 12 & 1)
+            c = self.core
+            wires, uio, _ = resolve(c.pin_out, c.pin_oe, 0, 0xFF)
+            self.eth.step(wires)
+            c.clock(ui_in=0xFF, uio_in=uio)
+            self.tx_trace.append(c.pin_out >> 12 & 1)
 
     def transaction(self, data):
         cmd, payload = data[0], data[1:]
@@ -37,7 +43,7 @@ class ModelSpi:
                 rx += bytes((w >> 8, w & 0xFF))
             else:
                 self.core.clock(we=True, addr=addr, wdata=payload[i] << 8 | payload[i + 1])
-            if not (addr & 0x60 == 0x40 and addr & 15 == 15):
+            if not is_port(addr):
                 addr = (addr + 1) & 0x7F
         rx += bytes(len(data) - len(rx))          # odd trailing byte reads 0
         self.idle(400)
@@ -190,3 +196,18 @@ def test_pyserial_is_optional(monkeypatch):
     monkeypatch.setattr(builtins, "__import__", fake_import)
     with pytest.raises(fpga.LinkError, match="pyserial"):
         fpga.SerialLink()
+
+
+def test_cli_eth_selftest(link):
+    rc, out = run(["eth-selftest"], link)
+    assert rc == 0 and "PASSED" in out, out
+
+
+def test_cli_eth_send_puts_a_frame_on_the_wire(link):
+    rc, out = run(["eth-send", "hello wireshark"], link)
+    assert rc == 0, out
+    mon = link.ser.spi.eth
+    link.ser.spi.idle(8000)
+    assert not mon.errors and len(mon.frames) == 1, mon.errors
+    f = mon.frames[0]
+    assert eth.fcs_ok(f) and eth.parse_udp(f[:-4])[-1] == b"hello wireshark"

@@ -16,6 +16,9 @@ Command line (run from the sw/ directory):
     python3 -m pemu.fpga uart "Hello"       115200 8N1 text out of Pmod JB7
     python3 -m pemu.fpga peek 0x65 [count]  read registers
     python3 -m pemu.fpga poke 0x49 0x1234   write registers
+    python3 -m pemu.fpga eth-selftest       10BASE-T on-chip loopback test
+    python3 -m pemu.fpga eth-send "text"    broadcast a UDP packet (port 7777)
+    python3 -m pemu.fpga eth-serve          answer ping/ARP/UDP echo as 192.168.7.2
 
 Add --port /dev/tty.usbserial-XXXX1 if auto-detection picks the wrong port.
 pyserial (pip3 install pyserial) is only needed to talk to real hardware.
@@ -213,6 +216,54 @@ def cmd_poke(args, out):
     return 0
 
 
+def cmd_eth_selftest(args, out):
+    link = args.open_link()
+    link.reset()
+    old, sys.stdout = sys.stdout, out
+    try:
+        ok = pemu_board.eth_selftest(link)
+    finally:
+        sys.stdout = old
+    return 0 if ok else 1
+
+
+def cmd_eth_send(args, out):
+    eth = pemu_board.eth
+    chip = pemu_board.Pemu(args.open_link())
+    chip.check()
+    chip.eth_start()
+    text = args.text.encode().decode("unicode_escape").encode()
+    for i in range(args.count):
+        chip.eth_send(eth.udp_frame(text, src_ip=_ip(args.ip)))
+        if args.count > 1:
+            time.sleep(args.interval)
+    print(f"sent {args.count} UDP broadcast(s) to port 7777 from {args.ip} "
+          f"({len(text)} bytes each)", file=out)
+    return 0
+
+
+def cmd_eth_serve(args, out):
+    chip = pemu_board.Pemu(args.open_link())
+    chip.check()
+    chip.eth_start()
+    print(f"PEMU is {args.ip} (MAC 02:50:45:4d:55:01). On the laptop: give the "
+          f"Ethernet port a 192.168.7.x address, then  ping {args.ip}   (Ctrl-C to stop)",
+          file=out)
+    try:
+        chip.eth_serve(ip=_ip(args.ip), frames=args.frames, polls=args.polls,
+                       log=lambda m: print(m, file=out))
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
+def _ip(s):
+    parts = tuple(int(p) for p in s.split("."))
+    if len(parts) != 4 or not all(0 <= p < 256 for p in parts):
+        raise argparse.ArgumentTypeError(f"bad IPv4 address {s!r}")
+    return parts
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="python3 -m pemu.fpga",
                                 description="Control PEMU on a Basys 3 FPGA board.")
@@ -233,6 +284,19 @@ def build_parser():
     po.add_argument("addr", type=_int)
     po.add_argument("values", type=_int, nargs="+")
     po.set_defaults(func=cmd_poke)
+    sub.add_parser("eth-selftest", help="10BASE-T on-chip loopback self-test").set_defaults(
+        func=cmd_eth_selftest)
+    es = sub.add_parser("eth-send", help="broadcast UDP packets with this text (port 7777)")
+    es.add_argument("text")
+    es.add_argument("--count", type=int, default=1)
+    es.add_argument("--interval", type=float, default=1.0)
+    es.add_argument("--ip", default="192.168.7.2")
+    es.set_defaults(func=cmd_eth_send)
+    sv = sub.add_parser("eth-serve", help="answer ARP, ping and UDP echo (port 7)")
+    sv.add_argument("--ip", default="192.168.7.2")
+    sv.add_argument("--frames", type=int, default=None, help="stop after this many frames")
+    sv.add_argument("--polls", type=int, default=None, help="stop after this many polls")
+    sv.set_defaults(func=cmd_eth_serve)
     return p
 
 

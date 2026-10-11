@@ -188,6 +188,15 @@ async def test_board_driver_selftest(dut):
     assert ok
 
 
+@cocotb.test()
+async def test_board_driver_eth_selftest(dut):
+    """pemu_board.eth_selftest(): a 10BASE-T frame through the on-chip loopback,
+    with the frame loaded into the packet RAM over the bridge."""
+    p = await pc(dut)
+    ok = await bridge(pemu_board.eth_selftest)(BridgeLink(p))
+    assert ok
+
+
 async def uart_decode(sig, clk, bit_clks, n):
     """Decode n 8N1 bytes from a PEMU output pin."""
     high = 0                      # wait for the line to idle high first

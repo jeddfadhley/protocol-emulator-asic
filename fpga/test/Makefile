@@ -9,7 +9,7 @@ FST ?= -fst
 SRC_DIR = $(PWD)/../../src
 RTL_DIR = $(PWD)/../rtl
 
-VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,project.v pe_spi.v pe_core.v pe_engine.v pe_fifo.v)
+VERILOG_SOURCES += $(addprefix $(SRC_DIR)/,project.v pe_spi.v pe_core.v pe_engine.v pe_fifo.v pe_dma.v)
 VERILOG_SOURCES += $(RTL_DIR)/uart_spi_bridge.v $(RTL_DIR)/pemu_fpga_top.v
 VERILOG_SOURCES += $(PWD)/tb_fpga.v
 COMPILE_ARGS += -I$(SRC_DIR)

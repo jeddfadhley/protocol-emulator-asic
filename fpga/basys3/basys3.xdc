@@ -66,3 +66,8 @@ set_property -dict { PACKAGE_PIN P18  IOSTANDARD LVCMOS33 PULLTYPE PULLUP } [get
 ## (see docs/fpga.md).
 set_property -dict { PACKAGE_PIN J3   IOSTANDARD LVDS_25 DIFF_TERM FALSE } [get_ports eth_rx_p]
 set_property -dict { PACKAGE_PIN K3   IOSTANDARD LVDS_25 DIFF_TERM FALSE } [get_ports eth_rx_n]
+
+## Ethernet transmit (copies of PEMU pins 0 and 1) on JXADC2 (XA2_P, L3) and
+## JXADC8 (XA2_N, M3): the JXADC header has no 200 ohm series resistors.
+set_property -dict { PACKAGE_PIN L3   IOSTANDARD LVCMOS33 DRIVE 16 SLEW FAST } [get_ports eth_td_p]
+set_property -dict { PACKAGE_PIN M3   IOSTANDARD LVCMOS33 DRIVE 16 SLEW FAST } [get_ports eth_td_n]

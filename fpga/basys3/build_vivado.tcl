@@ -16,7 +16,7 @@ set top        pemu_basys3
 file mkdir $out_dir
 
 # ---------------------------------------------------------------- sources
-foreach f {project.v pe_spi.v pe_core.v pe_engine.v pe_fifo.v} {
+foreach f {project.v pe_spi.v pe_core.v pe_engine.v pe_fifo.v pe_dma.v} {
     read_verilog [file join $src_dir $f]
 }
 read_verilog [file join $rtl_dir uart_spi_bridge.v]

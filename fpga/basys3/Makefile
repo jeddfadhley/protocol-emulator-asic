@@ -33,7 +33,7 @@ SRC_DIR := ../../src
 RTL_DIR := ../rtl
 SOURCES := $(PROJECT).v \
            $(RTL_DIR)/pemu_fpga_top.v $(RTL_DIR)/uart_spi_bridge.v \
-           $(addprefix $(SRC_DIR)/,project.v pe_spi.v pe_core.v pe_engine.v pe_fifo.v)
+           $(addprefix $(SRC_DIR)/,project.v pe_spi.v pe_core.v pe_engine.v pe_fifo.v pe_dma.v)
 XDC     := basys3.xdc
 CHIPDB  := $(CHIPDB_DIR)/$(DBPART).bin
 

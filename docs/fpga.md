@@ -26,9 +26,11 @@ Optional, for experiments:
 - Jumper wires (female-to-female for the Pmod headers).
 - A USB-serial adapter (any 3.3 V one) to see PEMU's UART output.
 - For Ethernet: an **RJ45 MagJack breakout** (an RJ45 socket with built-in
-  transformer, e.g. a HanRun HR911105A breakout board), two 47 Ω resistors,
-  two 49.9 Ω (or 51 Ω) resistors, two 470 Ω resistors, a 2.2 kΩ and a 1.5 kΩ
-  resistor and a 100 nF capacitor. See [section 7](#7-ethernet-wiring).
+  transformer, e.g. a HanRun HR911105A breakout board), two 33 Ω resistors,
+  two 49.9 Ω (or 51 Ω) resistors, two 470 Ω resistors, two 2.2 kΩ and one
+  1.5 kΩ resistor, a 100 nF capacitor and jumper wires. Transmit only (the
+  laptop sees the packets in Wireshark) needs just the jack and the two 33 Ω
+  resistors. See [section 7](#7-ethernet-wiring).
 
 ## 2. Install the tools (once)
 
@@ -120,8 +122,30 @@ Other commands:
 
 The register map is in [isa.md](isa.md#register-map).
 
-Ethernet commands (`python3 -m pemu.fpga eth-...`) are being added separately
-and will be described here.
+Ethernet commands:
+
+| Command | What it does |
+|---------|--------------|
+| `python3 -m pemu.fpga eth-selftest` | sends a 10BASE-T frame from engine 0 to engine 1 inside the chip; no wiring needed |
+| `python3 -m pemu.fpga eth-send "hello"` | broadcasts a UDP packet (port 7777, from 192.168.7.2). Add `--count 10` to send several, one per second. Watch them arrive in Wireshark on the laptop. |
+| `python3 -m pemu.fpga eth-serve` | PEMU becomes 192.168.7.2 and answers ARP, ping and UDP echo (port 7). Every received frame is printed. Ctrl-C stops it. |
+
+### Ping the chip
+
+1. Wire the RJ45 jack as in [section 7](#7-ethernet-wiring) and connect it to
+   the laptop with an Ethernet cable (a USB-Ethernet adapter is fine).
+2. Give the laptop's Ethernet port a fixed address. On a Mac: System
+   Settings → Network → (the adapter) → Details → TCP/IP → Configure IPv4:
+   Manually, IP address `192.168.7.1`, subnet mask `255.255.255.0`.
+3. Run `python3 -m pemu.fpga eth-serve`. Within a second the adapter should
+   show a link (10 Mbit/s, half duplex): PEMU is sending link pulses.
+4. In another terminal: `ping 192.168.7.2`. Each ping shows up in the
+   `eth-serve` window as `rx ... ICMP -> reply`, and `ping` prints the reply.
+
+The reply path is: Ethernet → PEMU's `eth_rx` program → packet RAM → USB
+serial → the Python code on the laptop, which builds the reply → back
+through the packet RAM → `eth_tx` → Ethernet. Expect a few milliseconds per
+ping, mostly the USB serial link.
 
 If a command says the board was not found, check the cable and the power
 switch, run `python3 -m pemu.fpga ports`, and pass the port explicitly, e.g.
@@ -152,6 +176,7 @@ Pins 5 and 11 are GND, pins 6 and 12 are 3.3 V.
 | 13 (out) | uo_out[5] | JB8 | A17 | output; WS2812 data in the demos |
 | 14 (out) | uo_out[6] | JB9 | C15 | output |
 | 8 (in) | ui_in[0] | JXADC1 / JXADC7 | J3 / K3 | differential input (XA1_P / XA1_N); Ethernet RD+ / RD- |
+| 0, 1 (copy) | uio[0], uio[1] | JXADC2 / JXADC8 | L3 / M3 | outputs, same as JA1/JA2 (released together with them); Ethernet TD+ / TD- without the 200 Ω resistors |
 | 9 (in) | ui_in[1] | JC1 | K17 | input, pull-up |
 | 10 (in) | ui_in[2] | JC2 | M18 | input, pull-up |
 | 11 (in) | ui_in[3] | JC3 | N17 | input, pull-up |
@@ -171,34 +196,33 @@ on JXADC.
 ## 7. Ethernet wiring
 
 PEMU can produce 10BASE-T Ethernet signals in firmware: the transmit pair comes
-from PEMU pins 0 and 1 (JA1, JA2), and the receive pair goes into the
-differential input on JXADC. An Ethernet "MagJack" contains the isolation
+from PEMU pins 0 and 1, and the receive pair goes into the differential input
+on JXADC. Pins 0 and 1 also appear on JXADC2 and JXADC8, which have no
+200 Ω protection resistors, so the transmit signal is strong enough. Use
+those for Ethernet, and the whole Ethernet connection is on the one JXADC
+header. An Ethernet "MagJack" contains the isolation
 transformer that every Ethernet port needs, so you only add a few resistors.
 
 ### Transmit (FPGA to cable)
 
 ```
-  Basys 3 Pmod JA                                    RJ45 MagJack breakout
-  (each pin already has 200 Ω on the board)
+  Basys 3 Pmod JXADC                                 RJ45 MagJack breakout
 
-  JA1  (PEMU pin 0) ──────[ 47 Ω ]──────────────────  TD+
-  JA2  (PEMU pin 1) ──────[ 47 Ω ]──────────────────  TD-
-                                                      TCT (TX centre tap) ── 100 nF ── GND
-                                                                             (or leave unconnected)
-  JA5  (GND) ───────────────────────────────────────  GND
+  JXADC2  (PEMU pin 0, FPGA L3) ─────[ 33 Ω ]──────  TD+
+  JXADC8  (PEMU pin 1, FPGA M3) ─────[ 33 Ω ]──────  TD-
+                                                     TCT (TX centre tap): leave unconnected
+  JXADC5  (GND) ───────────────────────────────────  GND (shield)
 ```
 
-The FPGA drives TD+ and TD- in opposite directions (the firmware does this),
-with the strongest, fastest output setting (DRIVE 16, SLEW FAST). The 47 Ω
-resistors are the usual recipe for driving a MagJack from logic pins. On the
-Basys 3 the on-board 200 Ω resistors already do this job, so the 47 Ω
-resistors are optional: leaving them out gives a slightly bigger signal.
+The firmware drives TD+ and TD- in opposite directions, and releases both
+between packets (that is the 10BASE-T idle state). With 33 Ω resistors the
+signal on the cable is about ±1.5 V, a little under the standard's
+2.2-2.8 V, which receivers handle easily over a normal cable. Smaller
+resistors (down to 0 Ω) give a bigger signal but more current from the FPGA
+pins; 33 Ω keeps them under their 16 mA setting.
 
-**Expect a weak signal.** With roughly 250 Ω in series with each wire and the
-cable's 100 Ω load, the signal is about 0.6 V instead of the 2.2-2.8 V the
-standard asks for. Most network cards and switches still detect it over a
-short cable (their threshold is typically 0.3-0.6 V), but this has not been
-tried yet with this design: use a short cable straight to a PC or switch.
+The same pair is on JA1/JA2, but there the board's 200 Ω protection
+resistors shrink the signal to about 0.6 V, which is marginal.
 
 ### Receive (cable to FPGA)
 
@@ -219,6 +243,8 @@ tried yet with this design: use a short cable straight to a PC or switch.
 
   bias point:  JXADC6 (3.3 V) ──[ 2.2 kΩ ]──┬──[ 1.5 kΩ ]── JXADC5 (GND)
                                              └── bias point
+
+  idle offset: 2.2 kΩ from RD- to JXADC12 (3.3 V)
 ```
 
 What each part does:
@@ -229,6 +255,10 @@ What each part does:
   where the FPGA's differential receiver works (the transformer's output
   floats otherwise). The 2.2 kΩ / 1.5 kΩ divider makes the voltage; the
   100 nF capacitor keeps it steady.
+- **The idle offset** (2.2 kΩ from RD- to 3.3 V) holds RD- about 45 mV
+  above RD+ when nothing is being sent. The FPGA's differential receiver has
+  no hysteresis, so without it the idle line would read as random noise. A
+  real signal is tens of times bigger and overrides it.
 - **470 Ω in series** with each wire protects the FPGA pins. The inputs draw
   almost no current, so these do not reduce the signal.
 
@@ -277,7 +307,11 @@ docker run --rm -v "$PWD":/work -w /work/fpga/basys3 regymm/openxc7 make
 
 - In simulation (`fpga/test`, run in CI): the bridge, the chip ID, register
   and instruction-memory read/write, reset, recovery from an abandoned
-  transaction, the self-test and UART output, all through the serial line.
+  transaction, the UART and Ethernet self-tests and UART output, all through
+  the serial line.
+- The Ethernet commands, against the Python model with a simulated link
+  partner checking every bit (`sw/tests/test_fpga_host.py`), and the ping
+  responder against a simulated laptop (`sw/tests/test_board_driver.py`).
 - The `pemu.fpga` tool, against the Python model of the chip (`sw/tests`).
 - The open-source tools build a bitstream in CI, and their timing estimate
   says the design runs at about 56 MHz, above the 50 MHz it needs (the
