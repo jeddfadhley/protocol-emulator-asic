@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from pemu.host import EngineConfig, config_writes, load_writes  # noqa: E402
 from pemu.ethhost import MAX_RX_BYTES  # noqa: E402
 from pemu.scenarios import (ETH_RD, ETH_RX_ORIGIN, ETH_TD, ETH_TX_ORIGIN,  # noqa: E402
-                            LED_PIN, SCL, SDA, UART_TX_PIN, USB_RX_DP, eth_rx_cfg, eth_tx_cfg,
-                            i2c_cfg, program, usb_rx_cfg)
+                            LED_PIN, SCL, SDA, UART_TX_PIN, USB_DP, USB_RX_DP, eth_rx_cfg,
+                            eth_tx_cfg, i2c_cfg, program, usb_rx_cfg, usb_tx_cfg)
 
 CLK_HZ = 50_000_000
 BAUD = 115_200
@@ -67,6 +67,10 @@ def demos():
         f"USB low-speed sniffer: D+ on IN{USB_RX_DP} (ui_in[{USB_RX_DP - 8}]), D- on "
         f"IN{USB_RX_DP + 1} (ui_in[{USB_RX_DP - 7}]). Engine 1, ring-buffer DMA into the packet RAM.",
         setup(1, program("usb_ls_rx"), 0, usb_rx_cfg()), 0x2, False, 0)
+    yield "USB_LOOPBACK", (
+        "USB low speed on-chip: engine 0 sends on GPIO6/7, engine 1 records it.",
+        setup(0, program("usb_ls_tx"), 0, usb_tx_cfg())
+        + setup(1, program("usb_ls_rx"), 16, usb_rx_cfg(USB_DP)), 0x3, True, 0)
     yield "I2C", (
         f"I2C master at ~100 kHz, SDA on GPIO{SDA}, SCL on GPIO{SCL} (needs pull-ups).",
         setup(0, program("i2c_master"), 0, i2c), 0x1, False, 0)

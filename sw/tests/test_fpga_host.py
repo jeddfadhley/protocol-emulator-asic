@@ -237,3 +237,8 @@ def test_cli_usb_sniff_decodes_a_keyboard(link):
     assert rc == 0, out
     assert "typed so far: 'Hi'" in out, out
     assert "! " not in out, out
+
+
+def test_cli_usb_selftest(link):
+    rc, out = run(["usb-selftest"], link)
+    assert rc == 0 and "PASSED" in out, out

@@ -122,3 +122,7 @@ def test_ethernet_serves_ping_on_model():
         link._clock()
     assert not link.mon.errors, link.mon.errors
     assert eth.parse_icmp_echo(link.mon.frames[0][:-4]) == (0, 9, 3, b"hi")
+
+
+def test_usb_selftest_on_model():
+    assert pemu_board.usb_selftest(ModelLink(idle_clocks=50))

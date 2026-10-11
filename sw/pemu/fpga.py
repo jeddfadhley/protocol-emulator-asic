@@ -19,6 +19,7 @@ Command line (run from the sw/ directory):
     python3 -m pemu.fpga eth-selftest       10BASE-T on-chip loopback test
     python3 -m pemu.fpga eth-send "text"    broadcast a UDP packet (port 7777)
     python3 -m pemu.fpga eth-serve          answer ping/ARP/UDP echo as 192.168.7.2
+    python3 -m pemu.fpga usb-selftest       USB send + sniff, on-chip
     python3 -m pemu.fpga usb-sniff          decode USB low-speed traffic (e.g. a keyboard)
 
 Add --port /dev/tty.usbserial-XXXX1 if auto-detection picks the wrong port.
@@ -247,6 +248,17 @@ def cmd_eth_selftest(args, out):
     return 0 if ok else 1
 
 
+def cmd_usb_selftest(args, out):
+    link = args.open_link()
+    link.reset()
+    old, sys.stdout = sys.stdout, out
+    try:
+        ok = pemu_board.usb_selftest(link)
+    finally:
+        sys.stdout = old
+    return 0 if ok else 1
+
+
 def cmd_eth_send(args, out):
     eth = pemu_board.eth
     chip = pemu_board.Pemu(args.open_link())
@@ -351,6 +363,8 @@ def build_parser():
     sv.add_argument("--frames", type=int, default=None, help="stop after this many frames")
     sv.add_argument("--polls", type=int, default=None, help="stop after this many polls")
     sv.set_defaults(func=cmd_eth_serve)
+    sub.add_parser("usb-selftest", help="USB low-speed on-chip loopback self-test").set_defaults(
+        func=cmd_usb_selftest)
     us = sub.add_parser("usb-sniff", help="record and decode USB low-speed traffic")
     us.add_argument("--all", action="store_true", help="also show IN, NAK, ACK and SOF")
     us.add_argument("--packets", type=int, default=None, help="stop after this many shown")

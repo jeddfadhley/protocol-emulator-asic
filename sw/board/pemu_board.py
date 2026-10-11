@@ -283,6 +283,38 @@ def eth_selftest(link=None):
     return ok
 
 
+def usb_selftest(link=None):
+    """USB low speed on-chip: engine 0 sends packets from the packet RAM,
+    engine 1 records them; every packet must decode with a good CRC."""
+    chip = Pemu(link or TTBoardSpi())
+    chip.check()
+    _desc, writes, enable, lb, _pins = DEMOS["USB_LOOPBACK"]
+    chip.write(A_CTRL, 0)
+    for addr, value in writes:
+        chip.write(addr, value)
+    chip.dma(1, 64, 64, rx=True)
+    chip.write(A_CTRL, enable | 4 | enable << 4)
+    get_descriptor = bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00])
+    packets = [usb.token(usb.PID_SETUP, 0, 0), usb.data_packet(usb.PID_DATA0, get_descriptor),
+               usb.handshake(usb.PID_ACK), usb.data_packet(usb.PID_DATA1, b"\xff" * 4)]
+    words = []
+    for p in packets:
+        words += usb.to_words(usb.encode(p))
+    chip.ram_write(0, words)
+    chip.dma(0, 0, len(words))
+    while (chip.read(A_DMA0) >> 7) & 255:
+        pass                      # the transmitter is still fetching words
+    end, same = -1, 0
+    while same < 20:              # then wait until the recording stops growing
+        now = chip.read(A_DMA1) & 127
+        same = same + 1 if now == end else 0
+        end = now
+    got = usb.split_capture(usb.capture_states(chip.ram_read(64, (end - 64) % 128)))
+    ok = [p for p, err in got if not err] == packets
+    print("PEMU USB self-test", "PASSED" if ok else "FAILED: %r" % (got,))
+    return ok
+
+
 def selftest(link=None):
     """UART loopback between the two engines, entirely on-chip."""
     chip = Pemu(link or TTBoardSpi())

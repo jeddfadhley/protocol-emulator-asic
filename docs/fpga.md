@@ -126,6 +126,7 @@ Ethernet commands:
 
 | Command | What it does |
 |---------|--------------|
+| `python3 -m pemu.fpga usb-selftest` | engine 0 sends USB low-speed packets from the packet RAM, engine 1 records and decodes them, inside the chip; no wiring needed |
 | `python3 -m pemu.fpga eth-selftest` | sends a 10BASE-T frame from engine 0 to engine 1 inside the chip; no wiring needed |
 | `python3 -m pemu.fpga eth-send "hello"` | broadcasts a UDP packet (port 7777, from 192.168.7.2). Add `--count 10` to send several, one per second. Watch them arrive in Wireshark on the laptop. |
 | `python3 -m pemu.fpga eth-serve` | PEMU becomes 192.168.7.2 and answers ARP, ping and UDP echo (port 7). Every received frame is printed. Ctrl-C stops it. |
@@ -340,7 +341,8 @@ docker run --rm -v "$PWD":/work -w /work/fpga/basys3 regymm/openxc7 make
   all 128 packet-RAM words and 64 instruction words read back correctly, and
   100 out of 100 Ethernet frames of random sizes and contents made it through
   the on-chip 10BASE-T loopback (about 80 ms per round trip, mostly USB
-  latency).
+  latency). With the half-clock pins and USB receiver added, the same tests
+  pass again, and `usb-selftest` decodes every USB packet sent on-chip.
 - **Not yet tried:** Ethernet to a real laptop through an RJ45 jack (the
   signal levels), UART
   output to a USB-serial adapter, I2C and WS2812 devices.
