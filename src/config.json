@@ -19,10 +19,6 @@
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
   "CLOCK_PERIOD": 20,
 
-  "//": "Optimise timing at every corner, not only typical, so 50 MHz (needed for 10BASE-T)",
-  "//": "also holds on slow silicon at high temperature.",
-  "RSZ_CORNERS": ["nom_slow_1p08V_125C", "nom_typ_1p20V_25C", "nom_fast_1p32V_m40C"],
-
   "//": "Hold slack margin - Increase them in case you are getting hold violations.",
   "PL_RESIZER_HOLD_SLACK_MARGIN": 0.1,
   "GRT_RESIZER_HOLD_SLACK_MARGIN": 0.05,

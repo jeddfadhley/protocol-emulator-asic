@@ -194,8 +194,9 @@ the timing repair was only run at the typical corner. The fixes:
   reaches the engines combinationally (spec updated).
 - The clock divider compare is computed a clock early, with a formal proof
   that it always equals the original.
-- The resizer now optimises the slow, typical and fast corners
-  (`RSZ_CORNERS` in `src/config.json`).
+- Optimising all three corners at once in the resizer (`RSZ_CORNERS`) was
+  tried and dropped: the layout no longer finished inside CI's 6-hour limit.
+  The two design fixes above remove the paths at their source instead.
 
 ## Bugs found by this process
 
