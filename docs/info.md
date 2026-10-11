@@ -38,7 +38,10 @@ The full ISA and register map are in [docs/isa.md](isa.md) in the project reposi
 
 ## How to test
 
-Clock the design at 50 MHz. The host SPI clock must be at most clk / 8.
+Clock the design at 50 MHz. The layout meets timing at 50 MHz on typical
+silicon (1.8 ns slack at 1.2 V, 25 °C); at the worst-case corner (1.08 V,
+125 °C) it needs about 30 ns, so use 33 MHz or less if you need that margin.
+The host SPI clock must be at most clk / 8.
 
 **Self-test with no external hardware.** Copy `sw/board/pemu_board.py` and `sw/board/pemu_demos.py` from
 the repository to the demo board and run:

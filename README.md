@@ -18,7 +18,7 @@ on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in a
 |---|---|
 | **Engines** | 2, each with X/Y, 16-bit in/out shift registers, 4-word TX/RX FIFOs, clock divider, side-set, CRC unit, timestamp counter |
 | **Program memory** | 64 x 16-bit words, shared; programs are relocatable (up to 32 instructions each) |
-| **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at up to 50 MHz |
+| **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at 50 MHz (typical silicon; see [timing](docs/verification.md#6-physical-implementation)) |
 | **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs, all with 2-flop synchronizers |
 | **Host link** | SPI slave: load programs, configure, stream data, debug |
 | **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX |
@@ -44,7 +44,8 @@ at robust protocols and at being verifiable:
 - **Lossless host reads.** A FIFO word is only consumed once all 16 bits
   have reached the host. The verification flow found the bug that made this
   necessary.
-- **Small.** Two 16-bit engines in about 0.24 mm² of cell area. PRU is a
+- **Small.** Two 16-bit engines in 0.31 mm² of placed cells, 34% of the
+  6x4-tile slot. PRU is a
   full 32-bit RISC core.
 
 ## Architecture
@@ -86,6 +87,8 @@ at robust protocols and at being verifiable:
 - **Formal proofs** (BMC + k-induction) of cycle exactness, FIFO safety and
   ordering, trap behaviour, and that nothing moves between ticks.
 - **Mutation testing.** All 25 deliberately planted RTL bugs are caught.
+- **Layout signed off** in Tiny Tapeout CI: DRC, LVS, antenna and precheck
+  clean, with the chip tests re-run on the gate-level netlist.
 
 ## Repository layout
 
