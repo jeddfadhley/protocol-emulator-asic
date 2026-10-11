@@ -101,7 +101,7 @@ def assemble(source, name=None):
                 text = m.group(2)
             if not text:
                 continue
-            if text.startswith("."):
+            if text.startswith(".") and not text.lower().startswith(".word"):
                 parts = text.split()
                 d = parts[0].lower()
                 if d == ".program":
@@ -157,6 +157,11 @@ def assemble(source, name=None):
 
 
 def _encode(text, defines, labels, side_count):
+    if text.lower().startswith(".word"):  # raw instruction word
+        w = _num(text[5:], defines)
+        if not 0 <= w < 1 << 16:
+            raise AsmError(".word value out of range")
+        return w
     # Strip the optional "[delay]" and "side v" suffixes.
     delay = 0
     m = re.search(r"\[([^\]]+)\]\s*$", text)
@@ -274,6 +279,76 @@ def _operands(mnem, args, rest, defines, labels):
         return OP_SET, (SET_DSTS[args[0].lower()] << 5) | imm
 
     raise AsmError(f"unknown instruction '{mnem}'")
+
+
+_JMP_NAMES = {v: k for k, v in JMP_CONDS.items()}
+_WAIT_NAMES = {v: k for k, v in WAIT_SRCS.items()}
+_SRC_NAMES = {v: k for k, v in SOURCES.items()}
+_OUT_NAMES = {v: k for k, v in OUT_DSTS.items()}
+_MOV_NAMES = {v: k for k, v in MOV_DSTS.items()}
+_SET_NAMES = {v: k for k, v in SET_DSTS.items()}
+
+
+def disassemble(word, side_count=0):
+    """One instruction word back to source text (canonical form).
+
+    Encodings with no canonical spelling (reserved opcode or fields) come
+    back as ".word 0x....", so disassemble -> assemble always round-trips.
+    """
+    word &= 0xFFFF
+    op, sd = word >> 13, (word >> 8) & 31
+    side = sd >> (5 - side_count) if side_count else None
+    delay = sd & ((1 << (5 - side_count)) - 1)
+    raw = f".word {word:#06x}"
+    n = (word & 15) or 16
+    if op == OP_JMP:
+        cond = _JMP_NAMES[(word >> 5) & 7]
+        text = f"jmp {cond + ', ' if cond else ''}{word & 31}"
+    elif op == OP_WAIT:
+        text = f"wait {(word >> 7) & 1} {_WAIT_NAMES[(word >> 5) & 3]} {word & 15}"
+        if (word >> 5) & 3 == 2 and word & 8:
+            return raw  # flag index uses 3 bits
+        if word & 16:
+            text += " timeout"
+    elif op == OP_IN:
+        if word & 16:
+            return raw
+        text = f"in {_SRC_NAMES[(word >> 5) & 7]}, {n}"
+    elif op == OP_OUT:
+        if word & 16 or (word >> 5) & 7 == 7:
+            return raw
+        text = f"out {_OUT_NAMES[(word >> 5) & 7]}, {n}"
+    elif op == OP_PUSHPULL:
+        if word & 31:
+            return raw
+        is_pull, cond, block = (word >> 7) & 1, (word >> 6) & 1, (word >> 5) & 1
+        text = "pull" if is_pull else "push"
+        if cond:
+            text += " ifempty" if is_pull else " iffull"
+        text += " block" if block else " noblock"
+    elif op == OP_MOV:
+        mop = (word >> 3) & 3
+        if mop == 3:
+            return raw
+        prefix = ["", "~", "::"][mop]
+        text = f"mov {_MOV_NAMES[(word >> 5) & 7]}, {prefix}{_SRC_NAMES[word & 7]}"
+    elif op == OP_SET:
+        dst, imm = (word >> 5) & 7, word & 31
+        if dst == 3:
+            if imm & 8:
+                return raw
+            text = f"{'clr' if imm & 16 else 'set'} flag, {imm & 7}"
+        elif dst in _SET_NAMES:
+            text = f"set {_SET_NAMES[dst]}, {imm}"
+        else:
+            return raw
+    else:
+        return raw
+    if side is not None:
+        text += f" side {side}"
+    if delay:
+        text += f" [{delay}]"
+    return text
 
 
 def assemble_file(path):

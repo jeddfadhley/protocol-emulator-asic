@@ -23,18 +23,28 @@ jobs:
         shell: bash
         run: pip install -r test/requirements.txt
 
-      - name: Run tests
+      - name: Model, assembler and firmware tests (Python)
+        run: cd sw && python -m pytest -q tests
+
+      - name: RTL vs model lockstep co-simulation
         run: |
           cd test
           make clean
+          make TB=core COSIM_SEEDS=150 COSIM_CYCLES=3000
+          test -f results.xml && ! grep failure results.xml
+          cp results.xml results_cosim.xml
+
+      - name: Chip-level protocol tests over SPI
+        run: |
+          cd test
           make
           # make will return success even if the test fails, so check for failure in the results.xml
-          ! grep failure results.xml
+          test -f results.xml && ! grep failure results.xml
 
       - name: Test Summary
         uses: test-summary/action@v2.4
         with:
-          paths: "test/results.xml"
+          paths: "test/results*.xml"
         if: always()
 
       - name: upload waveform and test results
@@ -44,5 +54,37 @@ jobs:
           name: test-results
           path: |
             test/tb.fst
-            test/results.xml
+            test/results*.xml
             test/output/*
+
+  formal:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Install OSS CAD Suite (Yosys, yosys-smtbmc, Yices)
+        uses: YosysHQ/setup-oss-cad-suite@v3
+
+      - name: Formal proofs (BMC + k-induction)
+        run: DEPTH=16 formal/run.sh
+
+  mutation:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Install iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python packages
+        run: pip install -r test/requirements.txt
+
+      - name: Mutation testing (every planted RTL bug must be caught)
+        run: python test/mutate.py

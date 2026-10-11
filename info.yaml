@@ -3,7 +3,7 @@ project:
   title:        "Protocol Emulator"      # Project title
   author:       "Jedd Fadhley"      # Your name
   discord:      ""      # Your discord username, for communication and automatically assigning you a Tapeout role (optional)
-  description:  "Programmable protocol emulator (milestone 0: hard-coded UART TX)"      # One line description of what your project does
+  description:  "Programmable protocol emulator: two cycle-exact pin engines run UART/SPI/I2C/WS2812 firmware"      # One line description of what your project does
   language:     "Verilog" # other examples include SystemVerilog, Amaranth, VHDL, etc
   clock_hz:     50000000      # Clock frequency in Hz (or 0 if not applicable)
 
@@ -18,40 +18,43 @@ project:
   # Don't forget to also update `PROJECT_SOURCES` in test/Makefile.
   source_files:
     - "project.v"
-    - "uart_tx.v"
+    - "pe_spi.v"
+    - "pe_core.v"
+    - "pe_engine.v"
+    - "pe_fifo.v"
 
 # The pinout of your project. Leave unused pins blank. DO NOT delete or add any pins.
 # This section is for the datasheet/website. Use descriptive names (e.g., RX, TX, MOSI, SCL, SEG_A, etc.).
 pinout:
   # Inputs
-  ui[0]: ""
-  ui[1]: ""
-  ui[2]: ""
-  ui[3]: ""
-  ui[4]: ""
-  ui[5]: ""
-  ui[6]: ""
-  ui[7]: ""
+  ui[0]: "IN8 (engine input)"
+  ui[1]: "IN9 (engine input)"
+  ui[2]: "IN10 (engine input)"
+  ui[3]: "IN11 (engine input, UART RX by convention)"
+  ui[4]: "HOST_CS_N"
+  ui[5]: "HOST_SCK"
+  ui[6]: "HOST_MOSI"
+  ui[7]: "IN15 (engine input)"
 
   # Outputs
-  uo[0]: ""
-  uo[1]: ""
-  uo[2]: ""
-  uo[3]: ""
-  uo[4]: "UART TX"
-  uo[5]: ""
-  uo[6]: ""
-  uo[7]: ""
+  uo[0]: "OUT8 (engine output)"
+  uo[1]: "OUT9 (engine output)"
+  uo[2]: "OUT10 (engine output)"
+  uo[3]: "OUT11 (engine output)"
+  uo[4]: "OUT12 (engine output, UART TX by convention)"
+  uo[5]: "OUT13 (engine output)"
+  uo[6]: "OUT14 (engine output)"
+  uo[7]: "HOST_MISO"
 
   # Bidirectional pins
-  uio[0]: ""
-  uio[1]: ""
-  uio[2]: ""
-  uio[3]: ""
-  uio[4]: ""
-  uio[5]: ""
-  uio[6]: ""
-  uio[7]: ""
+  uio[0]: "GPIO0 (engine pin, bidirectional)"
+  uio[1]: "GPIO1 (engine pin, bidirectional)"
+  uio[2]: "GPIO2 (engine pin, bidirectional)"
+  uio[3]: "GPIO3 (engine pin, bidirectional)"
+  uio[4]: "GPIO4 (engine pin, bidirectional)"
+  uio[5]: "GPIO5 (engine pin, bidirectional)"
+  uio[6]: "GPIO6 (engine pin, bidirectional)"
+  uio[7]: "GPIO7 (engine pin, bidirectional)"
 
 # Do not change!
 yaml_version: 6
