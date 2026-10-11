@@ -10,7 +10,9 @@ from .asm import assemble_file
 from .host import EngineConfig, ctrl
 from .model import (A_CTRL, A_FLAGS, A_ID, A_PIN_CLR, A_PIN_OE, A_PIN_SET,
                     CHIP_ID, R_STATUS, R_X, engine_base)
-from .periph import I2cTarget, PulseRecorder, SpiSlave, SquareWave, UartSink, UartSource
+from . import usb
+from .periph import (I2cTarget, PulseRecorder, SpiSlave, SquareWave, UartSink, UartSource,
+                     UsbLsMonitor)
 
 PROGRAMS = os.path.join(os.path.dirname(__file__), "..", "programs")
 
@@ -36,6 +38,7 @@ UART_RX_PIN = 11   # ui_in[3], the Tiny Tapeout UART RX convention
 SCK, MOSI, MISO, CS = 0, 1, 2, 3
 SDA, SCL = 4, 5
 LED_PIN = 13       # uo_out[5]
+USB_DP, USB_DM = 6, 7
 EDGE_PIN = 8       # ui_in[0]
 
 UART_DIV = 3                    # 4 clocks per tick
@@ -264,5 +267,29 @@ async def single_step(b):
     assert (await b.read(engine_base(0) + R_X)) == 6
 
 
+async def usb_ls_tx(b):
+    """USB low-speed packets at exactly 1.5 Mbit/s (48 MHz clock, 32 clocks/bit)."""
+    mon = b.monitor(UsbLsMonitor(USB_DP, USB_DM, 32))
+    cfg = EngineConfig(clkdiv=7, out_base=USB_DP, set_base=USB_DP, out_count=2,
+                       set_count=2, autopull=True, y=3)
+    await b.setup(0, program("usb_ls_tx"), 0, cfg)
+    get_descriptor = bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00])
+    packets = [usb.token(usb.PID_SETUP, 0, 0),
+               usb.data_packet(usb.PID_DATA0, get_descriptor),
+               usb.handshake(usb.PID_ACK),
+               usb.data_packet(usb.PID_DATA1, b"\xff" * 4)]  # needs bit stuffing
+    words = []
+    for p in packets:
+        words += usb.to_words(usb.encode(p))
+    for w in words[:3]:
+        await b.push(0, w)
+    await b.start(1)
+    await b.stream(0, words[3:], 8 * 32 + 8)  # slightly slower than the line rate
+    await b.run_until(lambda: len(mon.packets) + len(mon.errors) >= len(packets), 50_000)
+    assert not mon.errors, mon.errors
+    assert mon.packets == packets, [p.hex() for p in mon.packets]
+    assert not (await b.status(0)) & (1 << 14), "TX FIFO overflowed"
+
+
 SCENARIOS = [check_id, uart_tx, uart_tx_timing, uart_rx, uart_loopback, spi, sd_cmd,
-             i2c, i2c_timeout, ws2812, edge_stamp, single_step]
+             i2c, i2c_timeout, ws2812, edge_stamp, single_step, usb_ls_tx]

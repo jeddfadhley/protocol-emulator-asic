@@ -1,12 +1,18 @@
-# Sample testbench for a Tiny Tapeout project
+# PEMU testbenches
 
-This is a sample testbench for a Tiny Tapeout project. It uses [cocotb](https://docs.cocotb.org/en/stable/) to drive the DUT and check the outputs.
-See below to get started or for more information, check the [website](https://tinytapeout.com/hdl/testing/).
+cocotb testbenches for the PEMU chip. See [../docs/verification.md](../docs/verification.md)
+for the overall strategy.
 
-## Setting up
+| File | What it does |
+|------|--------------|
+| `test.py` + `rtl_bench.py` | chip-level tests through the SPI host pins: register access plus every protocol scenario from `../sw/pemu/scenarios.py` |
+| `test_cosim.py` + `tb_core.v` | RTL core vs the Python reference model, compared every clock (`make TB=core`) |
+| `mutate.py` | mutation testing: plants bugs in the RTL and checks the tests catch them |
 
-1. Edit [Makefile](Makefile) and modify `PROJECT_SOURCES` to point to your Verilog files.
-2. Edit [tb.v](tb.v) and replace `tt_um_example` with your module name.
+Options for the co-simulation: `COSIM_SEEDS`, `COSIM_CYCLES`, `COSIM_SEED0`.
+
+cocotb's Makefile cannot cope with spaces in the project path; run from a path
+without spaces (a symlink works).
 
 ## How to run
 

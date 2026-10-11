@@ -1,193 +1,129 @@
-![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg) ![](../../workflows/fpga/badge.svg)
+![](../../workflows/gds/badge.svg) ![](../../workflows/docs/badge.svg) ![](../../workflows/test/badge.svg)
 
-# Protocol Emulator ASIC
+# PEMU: a programmable protocol emulator ASIC
 
-An open-source, programmable protocol emulator chip: a tiny processor whose instruction set is built for driving and sampling pins with cycle-exact timing, so hardware protocols (UART, SPI, I2C, and beyond) are implemented in firmware rather than fixed logic.
+PEMU is an open-source chip that speaks hardware protocols in firmware. Two
+small engines run programs whose instructions drive and sample pins with
+**cycle-exact, formally proven timing**. UART, SPI, I2C, WS2812, SD card
+commands and USB low-speed are just programs, and new protocols need no new
+silicon.
 
-Built for the [Jane Street protocol emulator ASIC competition](https://blog.janestreet.com/), targeting IHP 130nm CMOS5L via [Tiny Tapeout](https://tinytapeout.com).
+Built for the [Jane Street protocol emulator ASIC competition](https://blog.janestreet.com/protocol-emulator-asic-competition/)
+on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in a
+6x4-tile allocation.
 
-> **Status:** early design. The ISA and architecture below are drafts and will change.
+## Highlights
 
----
+| | |
+|---|---|
+| **Engines** | 2, each with X/Y, 16-bit in/out shift registers, 4-word TX/RX FIFOs, clock divider, side-set, CRC unit, timestamp counter |
+| **Program memory** | 64 x 16-bit words, shared; programs are relocatable (up to 32 instructions each) |
+| **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at up to 50 MHz |
+| **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs, all with 2-flop synchronizers |
+| **Host link** | SPI slave: load programs, configure, stream data, debug |
+| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX |
 
-## Goals
+### What is new compared with RP2040 PIO and TI PRU
 
-- **Reprogrammable after fabrication.** New protocols are new programs, not new silicon.
-- **Cycle-exact timing.** Every instruction has a fixed, documented cycle count.
-- **Small.** Fits in a 6×4 Tiny Tapeout allocation (~24 tiles, ~0.7 mm², roughly 24k logic cells).
-- **Well verified.** Formal properties on the core, plus protocol-level co-simulation against reference models.
-- **Usable.** Ships with an assembler, an instruction-level simulator, and example programs.
+PIO inspired the shift-register and side-set model. PEMU adds features aimed
+at robust protocols and at being verifiable:
 
-### Protocol targets
+- **Wait timeouts with a trap vector.** `wait 1 pin 1 timeout` jumps to a
+  handler if the condition never comes, so a hung I2C bus, a missing 1-Wire
+  device or an idle line is handled in firmware without host polling. PIO
+  waits forever.
+- **CRC unit.** A left-justified Galois LFSR with any polynomial up to 16
+  bits (CRC-5/7/15/16) is fed by `IN`/`OUT` bit by bit. The SD-card example
+  appends CRC7 in real time.
+- **Edge waits and a timestamp counter.** `wait 1 edge n` and `in time, 16`
+  make a logic analyser or pulse measurer in four instructions.
+- **On-chip loopback.** One engine can drive a protocol while the other
+  receives it, with no external wiring. The demo-board self-test uses this.
+- **Debuggable.** Single-step, readable PC/X/Y/ISR/OSR/status, sticky
+  overflow and timeout flags.
+- **Lossless host reads.** A FIFO word is only consumed once all 16 bits
+  have reached the host. The verification flow found the bug that made this
+  necessary.
+- **Small.** Two 16-bit engines in about 0.24 mm² of cell area. PRU is a
+  full 32-bit RISC core.
 
-| Tier | Protocols |
-|------|-----------|
-| Core | UART, SPI, I2C |
-| Stretch | USB low-speed, 10BASE-T Ethernet |
-| Nice to have | JTAG, SWD, PS/2, CAN |
-
----
-
-## Constraints
-
-| Item | Value |
-|------|-------|
-| Process | IHP SG13G2 130nm (CMOS5L shuttle) |
-| Template | Tiny Tapeout CMOS5L Verilog template |
-| Area | 6×4 tiles (`info.yaml`), possibly 8×4 later |
-| Tile size | ~200 µm × 150 µm, ~1k cells per tile |
-| Deadline | **18 January 2027** |
-| Target shuttle | March 2027 (subject to foundry schedule) |
-
----
-
-## Architecture (draft)
+## Architecture
 
 ```
-            ┌──────────────────────────────────────────────┐
-  host ───► │  config / load interface (SPI or UART slave) │
-            └──────────────┬───────────────────────────────┘
-                           │
-            ┌──────────────▼───────────────┐
-            │  instruction memory (SRAM)   │
-            └──────────────┬───────────────┘
-                           │
-   ┌───────────────────────▼────────────────────────┐
-   │  execution engine(s)                           │
-   │   • PC + fixed-cycle decoder                   │
-   │   • shift registers (in / out)                 │
-   │   • scratch registers + loop counters          │
-   │   • fractional clock divider                   │
-   │   • TX / RX FIFOs                              │
-   │   • optional assists: CRC, bit stuffing, edge  │
-   │     wait with timeout                          │
-   └───────────────────────┬────────────────────────┘
-                           │
-            ┌──────────────▼───────────────┐
-            │  pin mapping / IO mux        │ ◄──► GPIO
-            └──────────────────────────────┘
+   host (e.g. RP2040)
+        │ SPI: CS_N/SCK/MOSI on ui_in[6:4], MISO on uo_out[7]
+  ┌─────▼──────┐  register bus  ┌──────────────────────────────────────────┐
+  │  pe_spi    ├───────────────►│ pe_core                                  │
+  └────────────┘                │  instruction memory (64 x 16)            │
+                                │  ┌───────────────┐   ┌───────────────┐   │
+                                │  │ pe_engine 0   │   │ pe_engine 1   │   │
+                                │  │ PC X Y ISR OSR│   │ PC X Y ISR OSR│   │
+                                │  │ CRC TIME FIFOs│   │ CRC TIME FIFOs│   │
+                                │  └──────┬────────┘   └──────┬────────┘   │
+                                │      pin registers, event flags,         │
+                                │      synchronizers, loopback             │
+                                └──────────────┬───────────────────────────┘
+                                   uio[7:0], uo_out[6:0], ui_in
 ```
 
-Open questions:
-- One engine or two? Two allows full duplex and multi-wire protocols but costs area.
-- Instruction memory size: SRAM macro versus flip-flops.
-- Which hardware assists earn their area (USB and CAN mostly need CRC and bit stuffing).
-- How the host loads programs and moves data in and out.
+## Documentation
 
-### ISA (draft)
+- [docs/isa.md](docs/isa.md): ISA, timing rules and register map (the spec)
+- [docs/programming.md](docs/programming.md): how to write a protocol
+- [docs/verification.md](docs/verification.md): verification strategy and results
+- [docs/info.md](docs/info.md): Tiny Tapeout datasheet page
 
-Inspired by RP2040 PIO and TI PRU. Candidate instructions:
+## Verification at a glance
 
-| Instruction | Purpose |
-|-------------|---------|
-| `SET pins, imm` | Drive pins to a value |
-| `WAIT pin, level` | Stall until a pin reaches a level (optional timeout) |
-| `OUT pins, n` | Shift n bits from the output shift register to pins |
-| `IN pins, n` | Shift n bits from pins into the input shift register |
-| `PUSH` / `PULL` | Move data between shift registers and FIFOs |
-| `JMP cond, addr` | Branch on counter, pin, or shift-register state |
-| `MOV dst, src` | Register moves |
-| delay field | Every instruction can idle for N extra cycles |
-
-Full encoding: see [`docs/isa.md`](docs/isa.md) (to be written).
-
----
+- **Lockstep co-simulation** of the RTL against an independent Python
+  reference model, comparing every architectural register every clock:
+  constrained-random programs (the whole 16-bit encoding space) plus a
+  directed sweep of shift-count/threshold boundaries. About 600k compared
+  clocks per CI run.
+- **Protocol scenarios.** The same firmware and device models run on the
+  model and on the RTL through its SPI pins, and then on the gate-level
+  netlist in CI.
+- **Formal proofs** (BMC + k-induction) of cycle exactness, FIFO safety and
+  ordering, trap behaviour, and that nothing moves between ticks.
+- **Mutation testing.** All 25 deliberately planted RTL bugs are caught.
 
 ## Repository layout
 
 ```
-.
-├── src/            # RTL (Verilog), top module matches Tiny Tapeout template
-├── test/           # cocotb testbenches and protocol reference models
-├── formal/         # SymbiYosys properties
-├── sw/
-│   ├── asm/        # assembler
-│   ├── sim/        # instruction-level simulator (Python)
-│   └── programs/   # example protocol programs (uart_tx.s, spi.s, i2c.s, ...)
-├── fpga/           # FPGA bring-up wrapper and constraints
-├── docs/           # ISA spec, architecture notes, area/timing reports
-├── info.yaml       # Tiny Tapeout project config (tiles: 6x4)
-└── README.md
+src/            RTL: project.v (top), pe_spi.v, pe_core.v, pe_engine.v, pe_fifo.v
+test/           cocotb: chip-level tests (test.py), co-simulation (test_cosim.py), mutate.py
+formal/         run.sh: Yosys + yosys-smtbmc proofs
+sw/pemu/        Python: assembler, cycle-accurate model, device models, USB coder, scenarios
+sw/programs/    protocol firmware (*.pasm)
+sw/board/       MicroPython driver and demos for the Tiny Tapeout demo board
+sw/tests/       pytest suite for the Python side
+docs/           spec, programming guide, verification report, datasheet
 ```
 
----
-
-## Getting started
-
-### Prerequisites
-
-- Python 3.11+
-- [Icarus Verilog](https://steveicarus.github.io/iverilog/) or [Verilator](https://www.veripool.org/verilator/)
-- [cocotb](https://www.cocotb.org/)
-- [Yosys](https://yosyshq.net/yosys/) and [SymbiYosys](https://symbiyosys.readthedocs.io/) for formal
-- The Tiny Tapeout CMOS5L flow (see the [Tiny Tapeout docs](https://tinytapeout.com))
-
-### Run the tests
+## Quick start
 
 ```bash
-cd test
-make            # runs all cocotb tests
-make TEST=uart  # run a single protocol test
+pip install -r test/requirements.txt         # cocotb, pytest; needs Icarus Verilog
+cd sw && python -m pytest -q tests           # model + assembler + firmware
+python -m pemu.asm programs/uart_tx.pasm     # assemble a program
+cd ../test && make                           # chip-level tests on the RTL
+make TB=core                                 # RTL vs model co-simulation
+../formal/run.sh                             # formal proofs (yosys + yices)
 ```
 
-### Run formal checks
+On the demo board, copy `sw/board/pemu_board.py` and `sw/board/pemu_demos.py`
+to the RP2040 and run `import pemu_board; pemu_board.selftest()`.
 
-```bash
-cd formal
-sby -f core.sby
-```
+## Limitations and future work
 
-### Assemble and simulate a program
-
-```bash
-python sw/asm/asm.py sw/programs/uart_tx.s -o build/uart_tx.hex
-python sw/sim/sim.py build/uart_tx.hex --trace
-```
-
-### Harden
-
-Follow the Tiny Tapeout CMOS5L template flow. Check area and timing after every significant change; see `docs/reports/`.
-
----
-
-## Verification strategy
-
-1. **Instruction-level simulator** is the golden model. RTL is checked against it instruction by instruction.
-2. **Formal (SymbiYosys):** fixed cycle counts per instruction, FIFO safety, no deadlock in the decoder, pin outputs only change on documented cycles.
-3. **Protocol co-simulation:** real firmware runs on the RTL against reference UART/SPI/I2C models in cocotb, including randomised baud rates, clock modes and bus contention.
-4. **Constrained random:** random programs run on both RTL and simulator, outputs compared.
-5. **FPGA:** run on hardware against real peripherals before tapeout.
-
----
-
-## Roadmap
-
-| Target | Milestone |
-|--------|-----------|
-| Mid Oct | Template flow builds; hard-coded UART TX out of a pin |
-| End Oct | ISA v1 frozen; Python simulator and assembler |
-| Mid Nov | RTL engine passing UART/SPI tests in simulation |
-| End Nov | I2C working; formal properties in place; first area report |
-| Mid Dec | FPGA bring-up; stretch protocol attempts (USB LS) |
-| Early Jan | Area and timing closure; documentation |
-| **18 Jan 2027** | **Submit** |
-
----
-
-## Working with Claude Code
-
-This repo is developed with Claude Code. Guidelines for agents and humans alike:
-
-- Keep the simulator, assembler and RTL in sync. An ISA change means updating all three plus `docs/isa.md` in the same change.
-- Every RTL change needs a passing test run. Never mark work done with failing tests.
-- Run synthesis after any change that adds state or logic and record cell count in `docs/reports/`.
-- Prefer small, reviewable commits.
-- Don't hand-edit generated files (GDS, netlists, `build/`).
-
-Project-specific instructions for Claude Code live in [`CLAUDE.md`](CLAUDE.md).
-
----
+- USB low-speed **receive** and 10BASE-T need a sample stream faster than the
+  host can drain over SPI. Hardware NRZI decoding, de-stuffing and deeper
+  FIFOs would make this possible within the area budget.
+- No ALU: arithmetic is done on the host, and firmware branches on bits with
+  `out x, 1` / `jmp !x`.
+- The MicroPython board driver is tested against the model but has not yet
+  run on silicon or an FPGA.
 
 ## License
 
-Apache 2.0 (as required: the submission must be open source).
+Apache 2.0.

@@ -270,6 +270,52 @@ class SquareWave:
         return level
 
 
+class UsbLsMonitor:
+    """Watches a USB low-speed D+/D- pair. Every line state must last an
+    exact multiple of `period` clocks; packets are decoded (NRZI, stuffing,
+    SYNC, PID, CRC) by an implementation independent of the encoder."""
+
+    def __init__(self, dp, dm, period):
+        from . import usb
+        self.usb = usb
+        self.dp, self.dm, self.period = dp, dm, period
+        self.packets, self.errors = [], []
+        self.active = False
+        self.cur, self.n, self.runs = None, 0, []
+
+    def step(self, wires):
+        usb = self.usb
+        s = (bit(wires, self.dm) << 1) | bit(wires, self.dp)
+        if not self.active:
+            if s == usb.K:  # start of SYNC
+                self.active, self.cur, self.n, self.runs = True, s, 1, []
+            return 0
+        if s == self.cur:
+            self.n += 1
+            return 0
+        self.runs.append((self.cur, self.n))
+        self.cur, self.n = s, 1
+        if len(self.runs) >= 2 and self.runs[-1][0] == usb.J and self.runs[-2][0] == usb.SE0:
+            self._finish()
+            self.active = False
+        return 0
+
+    def _finish(self):
+        states = []
+        for st, n in self.runs:
+            if n % self.period:
+                self.errors.append(f"state {st} lasted {n} clocks (bit = {self.period})")
+            states += [st] * (n // self.period)
+        try:
+            pkt = self.usb.decode_states(states)
+        except self.usb.UsbError as exc:
+            self.errors.append(str(exc))
+            return
+        if not self.usb.check_crc(pkt):
+            self.errors.append(f"CRC error in {pkt.hex()}")
+        self.packets.append(pkt)
+
+
 class PulseRecorder:
     """Records (level, length) runs on a wire."""
 

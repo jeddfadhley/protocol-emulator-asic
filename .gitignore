@@ -18,3 +18,4 @@ test/sim_build_core
 formal/build/
 __pycache__/
 .pytest_cache/
+test/results_cosim.xml

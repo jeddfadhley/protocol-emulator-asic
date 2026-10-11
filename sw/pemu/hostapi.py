@@ -43,6 +43,17 @@ class HostApi:
             await self.push(engine, w)
             level += 1
 
+    async def stream(self, engine, words, interval):
+        """Push one word every `interval` clocks without polling: for real-time
+        streams where the host knows the engine's consumption rate."""
+        for w in words:
+            t0 = self.cycles
+            await self.push(engine, w)
+            left = interval - (self.cycles - t0)
+            if left < 0:
+                raise RuntimeError("host too slow for this stream interval")
+            await self.run(left)
+
     async def drain(self, engine, n, polls=100_000):
         """Pop n words from the RX FIFO, polling STATUS until each arrives."""
         out = []
