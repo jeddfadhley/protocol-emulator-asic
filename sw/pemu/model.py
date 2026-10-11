@@ -20,7 +20,8 @@ RAM_WORDS = 128
 
 # Global register addresses
 (A_CTRL, A_FLAGS, A_PIN_IN, A_PIN_OUT, A_PIN_OE, A_ID, A_PIN_SET, A_PIN_CLR,
- A_RAM_ADDR, A_RAM_DATA, A_DMA0, A_DMA1, A_FLAG_SET, A_FLAG_CLR, A_VERSION) = range(0x60, 0x6F)
+ A_RAM_ADDR, A_RAM_DATA, A_DMA0, A_DMA1, A_FLAG_SET, A_FLAG_CLR, A_VERSION,
+ A_PIN_LATE) = range(0x60, 0x70)
 CHIP_ID = 0x5045
 VERSION = 0x0002
 
@@ -84,6 +85,7 @@ class Effects:
     out_val: int = 0
     oe_mask: int = 0
     oe_val: int = 0
+    late_val: int = 0     # of the pins in out_mask: written late (half a clock)
     flag_set: int = 0
     flag_clr: int = 0
     tx_pop: bool = False
@@ -95,11 +97,12 @@ class Effects:
         if self.out_mask & b:
             self.out_mask |= m
             self.out_val = (self.out_val & ~m) | (0 if self.out_val & b else m)
+            self.late_val = (self.late_val & ~m) | (m if self.late_val & b else 0)
         if self.oe_mask & b:
             self.oe_mask |= m
             self.oe_val = (self.oe_val & ~m) | (m if self.oe_val & b else 0)
 
-    def write_pins(self, dirs, base, n, value):
+    def write_pins(self, dirs, base, n, value, late=False):
         m = rotl(mask_n(n), base)
         v = rotl(value & mask_n(n), base)
         if dirs:
@@ -108,6 +111,7 @@ class Effects:
         else:
             self.out_mask |= m
             self.out_val = (self.out_val & ~m) | v
+            self.late_val = (self.late_val & ~m) | (m if late else 0)
 
 
 @dataclass
@@ -344,7 +348,7 @@ class Engine:
             elif mop == 2:
                 v = bitrev16(v)
             if dst == 0:
-                pins.write_pins(0, self.out_base, self.out_count, v)
+                pins.write_pins(0, self.out_base, self.out_count, v, late=mop == 3)
             elif dst == 1:
                 self.x = v
             elif dst == 2:
@@ -379,7 +383,7 @@ class Engine:
         # op 6 is reserved and completes as a NOP
 
         # Instruction pin writes, then side-set on top (side-set wins).
-        fx.out_mask, fx.out_val = pins.out_mask, pins.out_val
+        fx.out_mask, fx.out_val, fx.late_val = pins.out_mask, pins.out_val, pins.late_val
         fx.oe_mask, fx.oe_val = pins.oe_mask, pins.oe_val
         if sc:
             fx.write_pins(self.side_pindir, self.side_base, sc, sd >> (5 - sc))
@@ -425,8 +429,11 @@ class Core:
         self.flags = 0
         self.pin_out = 0
         self.pin_oe = 0
+        self.pin_late = 0
+        self.pin_prev = 0   # PIN_OUT one clock ago: what late pins show first
         self.sync1 = 0
         self.sync2 = 0
+        self.pulses = 0     # CTRL pulse bits [9:4] written last clock
 
     # ----- combinational views -----
 
@@ -443,6 +450,11 @@ class Core:
     def outputs(self):
         """(uio_out, uio_oe, uo_out[6:0]) as driven by the core."""
         return self.pin_out & 0xFF, self.pin_oe & 0xFF, (self.pin_out >> 8) & 0x7F
+
+    def pad_early(self):
+        """Pin values in the first half of the current clock: pins written
+        late still show their previous value until the falling edge."""
+        return (self.pin_late & self.pin_prev) | (~self.pin_late & self.pin_out) & M16
 
     def read(self, addr):
         addr &= 0x7F
@@ -463,6 +475,7 @@ class Core:
             A_PIN_OUT: self.pin_out, A_PIN_OE: self.pin_oe, A_ID: CHIP_ID,
             A_RAM_ADDR: self.ram_addr, A_RAM_DATA: self.ram[self.ram_addr],
             A_DMA0: self.dma[0], A_DMA1: self.dma[1], A_VERSION: VERSION,
+            A_PIN_LATE: self.pin_late,
         }.get(addr, 0)
 
     # ----- one clock -----
@@ -473,10 +486,12 @@ class Core:
         wdata &= M16
         rdata = self.read(addr)
         pin_in = self.pin_in()
-        ctrl_w = we and addr == A_CTRL
-        restart = [ctrl_w and (wdata >> (4 + i)) & 1 for i in range(2)]
-        step = [ctrl_w and (wdata >> (6 + i)) & 1 for i in range(2)]
-        flush = [ctrl_w and (wdata >> (8 + i)) & 1 for i in range(2)]
+        # CTRL pulses act on the clock after the write
+        p = self.pulses
+        restart = [(p >> (4 + i)) & 1 for i in range(2)]
+        step = [(p >> (6 + i)) & 1 for i in range(2)]
+        flush = [(p >> (8 + i)) & 1 for i in range(2)]
+        self.pulses = wdata & 0x3F0 if (we and addr == A_CTRL) else 0
 
         fxs = []
         for i, e in enumerate(self.engines):
@@ -497,7 +512,9 @@ class Core:
 
         # Shared state: engine 0, then engine 1, then the host.
         pin_out, pin_oe, flags = self.pin_out, self.pin_oe, self.flags
+        pin_late = self.pin_late
         for fx in fxs:
+            pin_late = (pin_late & ~fx.out_mask) | (fx.late_val & fx.out_mask)
             pin_out = (pin_out & ~fx.out_mask) | (fx.out_val & fx.out_mask)
             pin_oe = (pin_oe & ~fx.oe_mask) | (fx.oe_val & fx.oe_mask)
             flags = (flags & ~fx.flag_clr) | fx.flag_set
@@ -589,13 +606,15 @@ class Core:
             elif addr == A_FLAGS:
                 flags = wdata & 0xFF
             elif addr == A_PIN_OUT:
-                pin_out = wdata
+                pin_out, pin_late = wdata, 0
             elif addr == A_PIN_OE:
                 pin_oe = wdata
             elif addr == A_PIN_SET:
                 pin_out |= wdata
+                pin_late &= ~wdata
             elif addr == A_PIN_CLR:
                 pin_out &= ~wdata & M16
+                pin_late &= ~wdata
             elif addr == A_RAM_ADDR:
                 self.ram_addr = wdata % RAM_WORDS
             elif addr == A_RAM_DATA:
@@ -609,7 +628,9 @@ class Core:
             elif addr == A_FLAG_CLR:
                 flags &= ~wdata & 0xFF
 
+        self.pin_prev = self.pin_out
         self.pin_out, self.pin_oe, self.flags = pin_out, pin_oe, flags
+        self.pin_late = pin_late & M16
         self.sync2 = self.sync1
         self.sync1 = ((ui_in & 0xFF) << 8) | (uio_in & 0xFF)
         return rdata

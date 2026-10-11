@@ -8,7 +8,7 @@ the gate-level netlist.
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge
+from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, Timer
 
 from pemu.hostapi import HostApi
 from pemu.periph import resolve
@@ -40,6 +40,7 @@ class RtlBench(HostApi):
         await ClockCycles(d.clk, 10)
         d.rst_n.value = 1
         cocotb.start_soon(self._pins())
+        cocotb.start_soon(self._half_clock())
 
     # ----- wiring (same as ModelBench) -----
 
@@ -77,11 +78,30 @@ class RtlBench(HostApi):
             for dev, b in self.ui_devs:
                 drive = (drive & ~(1 << b)) | (dev.step(wires) << b)
             for dev in self.monitors:
-                dev.step(wires)
+                if not getattr(dev, "half_clock", False):
+                    dev.step(wires)
             d.uio_in.value = uio
             d.ui_in.value = (ui & ~HOST_MASK) | self.spi_bits
             self.dev_low, self.ui_drive = low & 0xFF, drive & 0xFF
             self.cycles += 1
+
+    async def _half_clock(self):
+        """Devices with half_clock = True see the pins in both halves of
+        every clock (late pin writes change at the falling edge). Samples are
+        taken 5 ns into each half, which also works on gate-level netlists."""
+        d = self.dut
+        while True:
+            await RisingEdge(d.clk)
+            await Timer(5, unit="ns")
+            pin_out, pin_oe, _ = self.outputs()
+            first, _, _ = resolve(pin_out, pin_oe, self.dev_low, self.ui_drive)
+            await FallingEdge(d.clk)
+            await Timer(5, unit="ns")
+            pin_out, pin_oe, _ = self.outputs()
+            second, _, _ = resolve(pin_out, pin_oe, self.dev_low, self.ui_drive)
+            for dev in self.monitors:
+                if getattr(dev, "half_clock", False):
+                    dev.step2(first, second)
 
     # ----- time -----
 

@@ -261,6 +261,7 @@ async def single_step(b):
     pcs = []
     for _ in range(12):
         await b.write(A_CTRL, ctrl(step=1))
+        await b.run(1)                  # the pulse acts on the next clock
         pcs.append((await b.status(0)) & 31)
     assert pcs[0] == 1                  # pull done
     assert pcs[1:9] == [2] * 8          # start bit: 1 + 7 delay ticks

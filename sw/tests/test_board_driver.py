@@ -107,7 +107,8 @@ def test_ethernet_serves_ping_on_model():
         def _clock(self, **kw):
             c = self.core
             wires, uio, _ = resolve(c.pin_out, c.pin_oe, 0, 0)
-            self.mon.step(wires)
+            early, _, _ = resolve(c.pad_early(), c.pin_oe, 0, 0)
+            self.mon.step2(early, wires)
             ui = self.src.step(wires)
             return c.clock(ui_in=ui, uio_in=uio, **kw)
 

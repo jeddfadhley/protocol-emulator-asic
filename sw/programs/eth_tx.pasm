@@ -1,8 +1,9 @@
 .program eth_tx
 ; 10BASE-T Ethernet transmitter. Needs a 50 MHz clock and CLKDIV 0, so one
 ; bit is exactly 5 ticks (100 ns). Manchester code: each bit is sent as its
-; inverse for 2 ticks, then itself for 3 ticks, so every bit has a transition
-; in the middle. The receiving PHY locks onto those mid-bit transitions.
+; inverse, then itself, so every bit has a transition in the middle; the
+; receiving PHY locks onto those. Each half is exactly 2.5 ticks (50 ns): the
+; mid-bit write is "late", so the pins change half a clock after it.
 ;
 ; Pins: OUT_BASE = SET_BASE = SIDE_BASE = TD+, with PINCFG.DIFF so TD- is
 ; always the inverse of TD+. Side-set drives the pair's direction: released
@@ -20,9 +21,9 @@ idle:
     out y, 16               side 0
     out x, 1                side 0   ; first bit
 bit:
-    mov pins, ~x            side 1 [1]   ; first half: inverted bit (2 ticks)
-    mov pins, x             side 1       ; second half: the bit (3 ticks
-    out x, 1                side 1       ;   including these two)
+    mov pins, ~x            side 1 [1]   ; first half: inverted bit (2.5 ticks)
+    mov pins, x late        side 1       ; second half: the bit, from 2.5 ticks
+    out x, 1                side 1
     jmp y--, bit            side 1
     set pins, 1             side 1 [14]  ; end of frame: 300 ns high (TP_IDL)
     mov y, crc              side 0       ; release the pair

@@ -80,6 +80,17 @@ MUTATIONS = [
      "FLAG_SET overwrites the flags"),
     ("pe_core.v", "pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;", "pram[dma_addr] <= rxw0;", "RX DMA stores the wrong engine's word"),
     ("pe_spi.v", " || bus_addr == 7'h69;", ";", "SPI bursts walk off RAM_DATA"),
+    # timing work: half-clock pins, registered CTRL pulses, precomputed tick
+    ("pe_core.v", "assign pin_pad = (pin_late & pin_neg) | (~pin_late & pin_out);",
+     "assign pin_pad = pin_out;", "late pin writes are not late"),
+    ("pe_core.v", "pin_out  <= out_e1 | bus_wdata;\n            pin_late <= lt_e1 & ~bus_wdata;",
+     "pin_out  <= out_e1 | bus_wdata;\n            pin_late <= lt_e1;", "PIN_SET keeps the late flag"),
+    ("pe_engine.v", "late_val = (late_val & ~mm) | (((late_val & mb) != 16'h0000) ? mm : 16'h0000);", "",
+     "differential mirror drops the late flag"),
+    ("pe_engine.v", "div_hit <= divcnt_d >= clkdiv_d;", "div_hit <= divcnt_d > clkdiv_d;",
+     "precomputed divider compare off by one"),
+    ("pe_core.v", "step    <= ctrl_w ? bus_wdata[7:6] : 2'b00;", "step    <= ctrl_w ? bus_wdata[5:4] : 2'b00;",
+     "STEP pulse wired to the RESTART bits"),
 ]
 
 

@@ -264,6 +264,11 @@ def _operands(mnem, args, rest, defines, labels):
         dst = MOV_DSTS[args[0].lower()]
         src = args[1].replace(" ", "").lower()
         mop = 0
+        if src.endswith("late"):
+            # half a clock late (pins only): no ~ or :: with it
+            if args[0].lower() != "pins":
+                raise AsmError("'late' only applies to mov pins")
+            return OP_MOV, (dst << 5) | (3 << 3) | SOURCES[src[:-4]]
         if src.startswith("::"):
             mop, src = 2, src[2:]
         elif src[:1] in ("~", "!"):
@@ -341,9 +346,12 @@ def disassemble(word, side_count=0):
     elif op == OP_MOV:
         mop = (word >> 3) & 3
         if mop == 3:
-            return raw
-        prefix = ["", "~", "::"][mop]
-        text = f"mov {_MOV_NAMES[(word >> 5) & 7]}, {prefix}{_SRC_NAMES[word & 7]}"
+            if (word >> 5) & 7 != 0:
+                return raw
+            text = f"mov pins, {_SRC_NAMES[word & 7]} late"
+        else:
+            prefix = ["", "~", "::"][mop]
+            text = f"mov {_MOV_NAMES[(word >> 5) & 7]}, {prefix}{_SRC_NAMES[word & 7]}"
     elif op == OP_SET:
         dst, imm = (word >> 5) & 7, word & 31
         if dst == 3:

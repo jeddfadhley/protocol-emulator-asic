@@ -28,7 +28,7 @@ module tt_um_jeddfadhley_protocol_emu (
   wire        bus_we, bus_re, bus_rc;
   wire [6:0]  bus_addr;
   wire [15:0] bus_wdata, bus_rdata;
-  wire [15:0] pin_out, pin_oe;
+  wire [15:0] pin_out, pin_pad, pin_oe;
   wire        miso;
 
   pe_spi u_spi (
@@ -51,6 +51,7 @@ module tt_um_jeddfadhley_protocol_emu (
       .rst_n    (rst_n),
       .pins_ext ({ui_in, uio_in}),
       .pin_out  (pin_out),
+      .pin_pad  (pin_pad),
       .pin_oe   (pin_oe),
       .bus_we   (bus_we),
       .bus_re   (bus_re),
@@ -60,10 +61,10 @@ module tt_um_jeddfadhley_protocol_emu (
       .bus_rdata(bus_rdata)
   );
 
-  assign uo_out  = {miso, pin_out[14:8]};
-  assign uio_out = pin_out[7:0];
+  assign uo_out  = {miso, pin_pad[14:8]};
+  assign uio_out = pin_pad[7:0];
   assign uio_oe  = pin_oe[7:0];
 
-  wire _unused = &{ena, pin_out[15], pin_oe[15:8], 1'b0};
+  wire _unused = &{ena, pin_out, pin_pad[15], pin_oe[15:8], 1'b0};
 
 endmodule

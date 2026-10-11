@@ -21,6 +21,7 @@ module tb_core ();
   reg  [15:0] bus_wdata;
   wire [15:0] bus_rdata;
   wire [15:0] pin_out;
+  wire [15:0] pin_pad;
   wire [15:0] pin_oe;
 
   pe_core dut (
@@ -28,6 +29,7 @@ module tb_core ();
       .rst_n    (rst_n),
       .pins_ext (pins_ext),
       .pin_out  (pin_out),
+      .pin_pad  (pin_pad),
       .pin_oe   (pin_oe),
       .bus_we   (bus_we),
       .bus_re   (bus_re),

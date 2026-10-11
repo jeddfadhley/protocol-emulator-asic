@@ -48,8 +48,13 @@ class ModelBench(HostApi):
         drive = self.ui_drive
         for d, b in self.ui_devs:
             drive = (drive & ~(1 << b)) | (d.step(wires) << b)
+        if any(getattr(d, "half_clock", False) for d in self.monitors):
+            early, _, _ = resolve(c.pad_early(), c.pin_oe, self.dev_low, self.ui_drive)
         for d in self.monitors:
-            d.step(wires)
+            if getattr(d, "half_clock", False):
+                d.step2(early, wires)
+            else:
+                d.step(wires)
         rdata = c.clock(ui, uio, we=we, re=re, addr=addr, wdata=wdata, rc=rc)
         self.dev_low, self.ui_drive = low & 0xFF, drive & 0xFF
         self.cycles += 1

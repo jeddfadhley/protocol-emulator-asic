@@ -28,7 +28,8 @@ class ModelSpi:
         for _ in range(clocks):
             c = self.core
             wires, uio, _ = resolve(c.pin_out, c.pin_oe, 0, 0xFF)
-            self.eth.step(wires)
+            early, _, _ = resolve(c.pad_early(), c.pin_oe, 0, 0xFF)
+            self.eth.step2(early, wires)
             c.clock(ui_in=0xFF, uio_in=uio)
             self.tx_trace.append(c.pin_out >> 12 & 1)
 

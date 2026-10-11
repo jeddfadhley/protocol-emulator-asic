@@ -36,6 +36,7 @@ module pe_engine (
     input  wire [7:0]  flags,
     output reg  [15:0] out_mask,
     output reg  [15:0] out_val,
+    output reg  [15:0] late_val,  // of the pins in out_mask: written half a clock late
     output reg  [15:0] oe_mask,
     output reg  [15:0] oe_val,
     output reg  [7:0]  flag_set,
@@ -187,7 +188,12 @@ module pe_engine (
   // ---------------------------------------------------------------------
   // Tick generation
 
-  wire tick = restart ? 1'b0 : (en ? (divcnt >= clkdiv) : step);
+  // div_hit is (divcnt >= clkdiv), computed one clock ahead from the
+  // values both registers are about to take (proven in the formal block).
+  reg  div_hit;
+  wire tick = restart ? 1'b0 : (en ? div_hit : step);
+  wire [15:0] divcnt_d = (restart || !en || tick) ? 16'h0000 : divcnt + 16'd1;
+  wire [15:0] clkdiv_d = (sel && we && off == R_CLKDIV) ? wdata : clkdiv;
 
   // ---------------------------------------------------------------------
   // Execute
@@ -231,7 +237,7 @@ module pe_engine (
   reg [31:0] wide;
   reg [4:0]  base_cnt;
   reg [5:0]  cnt_sum;
-  reg [15:0] i_out_mask, i_out_val, i_oe_mask, i_oe_val;
+  reg [15:0] i_out_mask, i_out_val, i_oe_mask, i_oe_val, i_late;
   reg [15:0] smask, sval, mb, mm;
 
   always @(*) begin
@@ -263,6 +269,8 @@ module pe_engine (
     i_oe_val = 16'h0000;
     out_mask = 16'h0000;
     out_val = 16'h0000;
+    late_val = 16'h0000;
+    i_late = 16'h0000;
     oe_mask = 16'h0000;
     oe_val = 16'h0000;
 
@@ -462,6 +470,7 @@ module pe_engine (
               3'd0: begin
                 i_out_mask = rotl16(wmask, out_base);
                 i_out_val  = rotl16(v & wmask, out_base);
+                if (instr[4:3] == 2'd3) i_late = i_out_mask;  // mov pins, src late
               end
               3'd1: x_n = v;
               3'd2: y_n = v;
@@ -517,11 +526,13 @@ module pe_engine (
         if (side_pindir) begin
           out_mask = i_out_mask;
           out_val  = i_out_val;
+          late_val = i_late;
           oe_mask  = i_oe_mask | smask;
           oe_val   = (i_oe_val & ~smask) | sval;
         end else begin
           out_mask = i_out_mask | smask;
           out_val  = (i_out_val & ~smask) | sval;
+          late_val = i_late & ~smask;
           oe_mask  = i_oe_mask;
           oe_val   = i_oe_val;
         end
@@ -533,6 +544,7 @@ module pe_engine (
           if ((out_mask & mb) != 16'h0000) begin
             out_mask = out_mask | mm;
             out_val  = (out_val & ~mm) | (((out_val & mb) != 16'h0000) ? 16'h0000 : mm);
+            late_val = (late_val & ~mm) | (((late_val & mb) != 16'h0000) ? mm : 16'h0000);
           end
           if ((oe_mask & mb) != 16'h0000) begin
             oe_mask = oe_mask | mm;
@@ -592,6 +604,7 @@ module pe_engine (
       to_cnt <= 16'h0000;
       time_cnt <= 16'h0000;
       divcnt <= 16'h0000;
+      div_hit <= 1'b1;
       stalled <= 1'b0;
       timed_out <= 1'b0;
       rx_ovf <= 1'b0;
@@ -613,7 +626,6 @@ module pe_engine (
         to_cnt <= 16'h0000;
         time_cnt <= 16'h0000;
         stalled <= 1'b0;
-        divcnt <= 16'h0000;
       end else begin
         x <= x_n;
         y <= y_n;
@@ -631,10 +643,9 @@ module pe_engine (
         stalled <= stalled_n;
         timed_out <= timed_out_n;
         rx_ovf <= rx_ovf_n;
-        if (!en) divcnt <= 16'h0000;
-        else if (tick) divcnt <= 16'h0000;
-        else divcnt <= divcnt + 16'd1;
       end
+      divcnt  <= divcnt_d;
+      div_hit <= divcnt_d >= clkdiv_d;
 
       if (host_push && tx_count == 3'd4) tx_ovf <= 1'b1;
 
@@ -714,6 +725,12 @@ module pe_engine (
     // FIFO discipline: never push a full FIFO or pop an empty one
     assert (!(rx_push && rx_full));
     assert (!(tx_pop && tx_empty));
+
+    // The precomputed divider compare is always right
+    if (f_past_valid && rst_n) assert (div_hit == (divcnt >= clkdiv));
+
+    // Late writes only ever mark pins that are being written
+    assert ((late_val & ~out_mask) == 16'h0);
 
     // Between ticks nothing in the engine moves and nothing leaves it
     if (!tick) begin

@@ -36,6 +36,16 @@ same. The mirrored write replaces any other write by that engine to
 `OUT_BASE + 1` in the same tick. This drives a differential line (10BASE-T,
 RS-485) from one data bit, and releases both wires together.
 
+**Half-clock timing.** `mov pins, src late` (MOV op 3 with destination
+PINS) writes the pins like `mov pins, src`, but the pads change half a clock
+later, on the falling clock edge. `PIN_OUT`, the loopback and everything
+else inside the chip see the new value at once. Only the pads are late. Each
+pin remembers whether its last value write was late (`PIN_LATE`). Any other
+value write, by an engine or the host, clears that. Side-set writes are never
+late, and the `DIFF` mirror copies the late flag. This gives the outputs
+10 ns resolution at 50 MHz. `eth_tx` uses it so that both halves of every
+10BASE-T bit are exactly 50 ns (2.5 clocks).
+
 Inputs pass through a 2-flop synchronizer, so engines see a pin change two
 clocks after it happens.
 
@@ -193,7 +203,9 @@ the recorded level.
 Destinations: `0 PINS` (`OUT_COUNT` bits at `OUT_BASE`), `1 X`, `2 Y`,
 `3 CRC`, `4 PINDIRS`, `5 PC`, `6 ISR` (count = 0), `7 OSR` (count = 0).
 
-Ops: `0` none, `1` invert (`~`), `2` bit-reverse (`::`), `3` reserved (none).
+Ops: `0` none, `1` invert (`~`), `2` bit-reverse (`::`), `3` late (pins only:
+the pads change half a clock later, see section 1; with any other destination
+it acts as none).
 
 ### SET destinations
 
@@ -278,7 +290,7 @@ as 0 without losing a word that arrives during the read.
 |-------------|----------|-------------|
 | 0x00-0x3F   | IMEM     | instruction memory |
 | 0x40 + 16e  | engine e block, below | |
-| 0x60        | CTRL     | [0] EN0, [1] EN1, [2] LOOPBACK. Write-only pulses: [4] RESTART0, [5] RESTART1, [6] STEP0, [7] STEP1, [8] FLUSH0, [9] FLUSH1 |
+| 0x60        | CTRL     | [0] EN0, [1] EN1, [2] LOOPBACK. Write-only pulses, acting on the clock after the write: [4] RESTART0, [5] RESTART1, [6] STEP0, [7] STEP1, [8] FLUSH0, [9] FLUSH1 |
 | 0x61        | FLAGS    | [7:0] event flags |
 | 0x62        | PIN_IN   | read only: the inputs engines see |
 | 0x63        | PIN_OUT  | |
@@ -293,6 +305,7 @@ as 0 without losing a word that arrives during the read.
 | 0x6C        | FLAG_SET | write only: `FLAGS \|= value[7:0]` |
 | 0x6D        | FLAG_CLR | write only: `FLAGS &= ~value[7:0]` |
 | 0x6E        | VERSION  | read only: `0x0002` |
+| 0x6F        | PIN_LATE | read only: pins whose last value write was late (see 1, half-clock timing) |
 
 Engine block offsets:
 

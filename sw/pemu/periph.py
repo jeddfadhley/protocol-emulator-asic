@@ -341,73 +341,82 @@ class EthMonitor:
 
     The line state is +1 when TD+ is high and TD- low, -1 for the reverse and
     0 when both wires are equal (released: both pulled up). This checks the
-    transmitter strictly: normal link pulses must be exactly `nlp_clocks`
-    long, and in a frame every bit must be exactly 5 clocks with its
-    mid-bit transition after 2 clocks (Manchester, 10 Mbit/s at 50 MHz).
-    Frames end with TP_IDL: positive for at least 250 ns.
+    transmitter strictly at 10 ns resolution (half a clock at 50 MHz): every
+    bit is exactly 100 ns with its mid-bit transition after 50 ns, normal
+    link pulses are exactly 100 ns, and frames end with TP_IDL (positive for
+    250-375 ns). Times (`nlps`, `frame_times`) are in clocks.
+
+    The bench calls step2(first_half_wires, second_half_wires) every clock
+    (devices with half_clock = True), so late pin writes are seen exactly.
     """
 
-    def __init__(self, tdp, tdn, nlp_clocks=5):
+    half_clock = True
+    UNIT_NS = 10
+
+    def __init__(self, tdp, tdn):
         self.tdp, self.tdn = tdp, tdn
-        self.nlp_clocks = nlp_clocks
-        self.t = 0
-        self.runs = []          # (state, clocks) since the line left 0
+        self.u = 0              # time in 10 ns units
         self.cur, self.n = 0, 0
-        self.nlps = []          # start times of link pulses
+        self.runs = []
+        self.start = 0
+        self.nlps = []
         self.frames = []        # bytes after the SFD (including FCS)
         self.frame_times = []
         self.errors = []
-        self.start = 0
 
     def _state(self, wires):
         p, n = bit(wires, self.tdp), bit(wires, self.tdn)
         return 0 if p == n else (1 if p else -1)
 
-    def step(self, wires):
-        s = self._state(wires)
+    def step2(self, first, second):
+        self._unit(self._state(first))
+        self._unit(self._state(second))
+        return 0
+
+    def step(self, wires):  # whole-clock resolution (no late pins)
+        return self.step2(wires, wires)
+
+    def _unit(self, s):
         if s == self.cur:
             self.n += 1
         else:
-            if self.cur == 0 and s != 0:
-                self.runs, self.start = [], self.t
-            elif self.cur != 0:
+            if self.cur == 0:
+                self.runs, self.start = [], self.u
+            else:
                 self.runs.append((self.cur, self.n))
                 if s == 0:
                     self._burst(self.runs)
             self.cur, self.n = s, 1
-        self.t += 1
-        return 0
+        self.u += 1
 
     def _burst(self, runs):
-        if runs == [(1, self.nlp_clocks)]:
-            self.nlps.append(self.start)
+        t = self.start // 2
+        if runs == [(1, 10)]:
+            self.nlps.append(t)
             return
-        # One state per clock, read as 5-clock bit cells: 2 clocks of the
-        # inverted bit, then 3 of the bit
         line = [s for s, n in runs for _ in range(n)]
         bits, k = [], 0
-        while k + 5 <= len(line):
-            first, second = set(line[k:k + 2]), set(line[k + 2:k + 5])
+        while k + 10 <= len(line):
+            first, second = set(line[k:k + 5]), set(line[k + 5:k + 10])
             if len(first) != 1 or len(second) != 1 or first == second:
                 break
             bits.append(1 if second == {1} else 0)
-            k += 5
+            k += 10
         idle = line[k:]
-        # TP_IDL: positive for 250-375 ns after the last bit
-        if set(idle) != {1} or not 13 <= len(idle) <= 18:
-            self.errors.append(f"t={self.start}: bad end after {len(bits)} bits: "
-                               f"{len(idle)} clocks {sorted(set(idle))}")
+        if set(idle) != {1} or not 25 <= len(idle) <= 37:
+            self.errors.append(f"t={t}: bad end after {len(bits)} bits: "
+                               f"{len(idle)} x 10 ns {sorted(set(idle))}")
             return
         if len(bits) < 8 * 72 or len(bits) % 8:
-            self.errors.append(f"t={self.start}: {len(bits)} bits is not a whole frame")
+            self.errors.append(f"t={t}: {len(bits)} bits is not a whole frame")
             return
         data = bytes(sum(b << i for i, b in enumerate(bits[j:j + 8]))
                      for j in range(0, len(bits), 8))
         if data[:8] != bytes([0x55] * 7 + [0xD5]):
-            self.errors.append(f"t={self.start}: bad preamble {data[:8].hex()}")
+            self.errors.append(f"t={t}: bad preamble {data[:8].hex()}")
             return
         self.frames.append(data[8:])
-        self.frame_times.append(self.start)
+        self.frame_times.append(t)
 
 
 class EthSource:

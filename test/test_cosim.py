@@ -175,6 +175,8 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
         assert int(dut.bus_rdata.value) == exp_rdata, \
             f"{ctx}: rdata[{addr:#x}] {int(dut.bus_rdata.value):#06x} != {exp_rdata:#06x}"
         assert int(dut.pin_out.value) == model.pin_out, f"{ctx}: pin_out"
+        assert sig(dut, "dut.pin_late") == model.pin_late, f"{ctx}: pin_late"
+        assert int(dut.pin_pad.value) == model.pin_out, f"{ctx}: pad (second half)"
         assert int(dut.pin_oe.value) == model.pin_oe, f"{ctx}: pin_oe"
         assert sig(dut, "dut.flags") == model.flags, f"{ctx}: flags"
         assert sig(dut, "dut.ram_addr") == model.ram_addr, f"{ctx}: ram_addr"
@@ -210,6 +212,9 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
             if moved and not (we and addr == 0x6A + c):
                 coverage[f"dma{c}_{'rx' if dma_before[c] >> 15 else 'tx'}"] += 1
         await RisingEdge(dut.clk)
+        await cocotb.triggers.ReadOnly()
+        assert int(dut.pin_pad.value) == model.pad_early(), f"{ctx}: pad (first half)"
+        coverage["late_pins"] += bool(model.pin_late & (model.pin_out ^ model.pin_prev))
         await FallingEdge(dut.clk)
 
     for e in model.engines:
@@ -230,7 +235,7 @@ async def test_lockstep_random(dut):
     for op in (0, 1, 2, 3, 4, 5, 7):
         assert coverage[f"op{op}"] > 0, f"opcode {op} never executed"
     for item in ("wait_any_edge", "wait_edge", "diff_pin_ops", "dma0_tx", "dma0_rx",
-                 "dma1_tx", "dma1_rx"):
+                 "dma1_tx", "dma1_rx", "late_pins"):
         assert coverage[item] > 0, f"{item} never exercised"
 
 
@@ -282,6 +287,10 @@ FEATURES = [
     ("edge", "wait 1 edge {k}\nin pins, 1\nwait 0 edge {k} timeout\nin time, 3\npush noblock"),
     ("diff", "set pindirs, 1\nmov pins, ~x\nout pindirs, 1\nset pins, 0\nmov pindirs, ~y\n"
              "out pins, 2\nset pindirs, 0\nmov pins, x"),
+    ("late", "mov pins, x late\nmov pins, ~y [1]\nmov pins, osr late\nout pins, 1\n"
+             "mov pins, isr late [2]\nset pins, 3\nmov pins, ~x"),
+    ("late_side", ".side_set 1\nmov pins, x late side 1\nmov pins, y late side 0\n"
+                  "mov pins, ~x side 1 [1]\nmov pins, x late side 0"),
     ("diff_side", ".side_set 2 pindirs\nset pins, 1 side 1\nmov pins, ~x side 2\nout pindirs, 1 side 3\n"
                   "set pindirs, 0 side 0\nout pins, 1 side 1"),
 ]
@@ -304,7 +313,8 @@ async def test_lockstep_features(dut):
                 ob = rng.randrange(16)
                 pincfg = (rng.choice([1, 2, 3]) | rng.choice([1, 2]) << 4
                           | prog.side_count << 7 | int(prog.side_pindir) << 9
-                          | int(kind != "edge") << 10 | rng.randrange(16) << 12)
+                          | int(kind.startswith("diff") or rng.random() < 0.5) << 10
+                          | rng.randrange(16) << 12)
                 pinmap = ob | ob << 4 | rng.choice([ob, rng.randrange(16)]) << 8 | rng.randrange(16) << 12
                 script += [(b + 1, (len(prog.code) - 1) << 11), (b + 2, pinmap), (b + 3, pincfg),
                            (b + 4, 0x3 | rng.choice([0, 0xC])), (b + 5, rng.choice([3, 8, 30])),
@@ -313,6 +323,7 @@ async def test_lockstep_features(dut):
             script += [(0x64, rng.randrange(1 << 16)), (0x60, 0x33)]
             await run_lockstep(dut, rng, script, 400, coverage, f"feature {kind} {trial}",
                                toggle=(0xFFFF, 0.3), quiet_bus=(trial % 2 == 0))
+    assert coverage["late_pins"] > 100, coverage["late_pins"]
     dut._log.info(f"feature coverage: {dict(sorted(coverage.items()))}")
     for item in ("wait_any_edge", "wait_edge", "diff_pin_ops"):
         assert coverage[item] > 0, item
