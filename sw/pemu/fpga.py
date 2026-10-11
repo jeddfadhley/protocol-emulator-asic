@@ -19,6 +19,7 @@ Command line (run from the sw/ directory):
     python3 -m pemu.fpga eth-selftest       10BASE-T on-chip loopback test
     python3 -m pemu.fpga eth-send "text"    broadcast a UDP packet (port 7777)
     python3 -m pemu.fpga eth-serve          answer ping/ARP/UDP echo as 192.168.7.2
+    python3 -m pemu.fpga usb-sniff          decode USB low-speed traffic (e.g. a keyboard)
 
 Add --port /dev/tty.usbserial-XXXX1 if auto-detection picks the wrong port.
 pyserial (pip3 install pyserial) is only needed to talk to real hardware.
@@ -276,6 +277,40 @@ def cmd_eth_serve(args, out):
     return 0
 
 
+def cmd_usb_sniff(args, out):
+    usb = pemu_board.usb
+    chip = pemu_board.Pemu(args.open_link())
+    chip.check()
+    chip.usb_sniff_start()
+    print("Recording USB low speed: D+ on Pmod JC1, D- on JC2, GND to JC5. "
+          "Ctrl-C to stop.", file=out)
+    last_report, typed, shown = b"", "", 0
+    polls = 0
+    try:
+        while args.polls is None or polls < args.polls:
+            polls += 1
+            for pkt, err in chip.usb_sniff_poll():
+                if err:
+                    print(f"  ! {err}", file=out)
+                    continue
+                pid = pkt[0] & 15
+                is_data = pid in (usb.PID_DATA0, usb.PID_DATA1)
+                if args.all or not (pid in (usb.PID_IN, usb.PID_NAK, usb.PID_ACK, 0x5)):
+                    print(f"  {usb.describe(pkt)}", file=out)
+                    shown += 1
+                if is_data and len(pkt) == 11:          # 8-byte HID boot report
+                    keys = usb.hid_keys(pkt[1:9], last_report)
+                    last_report = pkt[1:9]
+                    if keys:
+                        typed += keys
+                        print(f"  keys: {keys!r}   typed so far: {typed!r}", file=out)
+            if args.packets is not None and shown >= args.packets:
+                break
+    except KeyboardInterrupt:
+        pass
+    return 0
+
+
 def _ip(s):
     parts = tuple(int(p) for p in s.split("."))
     if len(parts) != 4 or not all(0 <= p < 256 for p in parts):
@@ -316,6 +351,11 @@ def build_parser():
     sv.add_argument("--frames", type=int, default=None, help="stop after this many frames")
     sv.add_argument("--polls", type=int, default=None, help="stop after this many polls")
     sv.set_defaults(func=cmd_eth_serve)
+    us = sub.add_parser("usb-sniff", help="record and decode USB low-speed traffic")
+    us.add_argument("--all", action="store_true", help="also show IN, NAK, ACK and SOF")
+    us.add_argument("--packets", type=int, default=None, help="stop after this many shown")
+    us.add_argument("--polls", type=int, default=None, help="stop after this many polls")
+    us.set_defaults(func=cmd_usb_sniff)
     return p
 
 

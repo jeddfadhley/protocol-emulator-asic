@@ -139,3 +139,83 @@ def check_crc(packet):
     if pid in (PID_DATA0, PID_DATA1):
         return crc16(packet[1:-2]) == (packet[-2] | packet[-1] << 8)
     return len(packet) == 1
+
+
+# ----- receive side: the usb_ls_rx capture -----
+
+PID_NAMES = {0x1: "OUT", 0x9: "IN", 0x5: "SOF", 0xD: "SETUP", 0x3: "DATA0", 0xB: "DATA1",
+             0x7: "DATA2", 0xF: "MDATA", 0x2: "ACK", 0xA: "NAK", 0xE: "STALL", 0x6: "NYET",
+             0xC: "PRE"}
+
+
+def capture_states(words):
+    """usb_ls_rx RAM words -> line states, 8 per word, first in bits [1:0]."""
+    return [(w >> (2 * k)) & 3 for w in words for k in range(8)]
+
+
+def split_capture(states):
+    """Line states sampled once per bit -> [(packet bytes or None, error)].
+
+    A packet starts at the first K after idle (J) and ends with SE0 SE0 J."""
+    return split_stream(states)[0]
+
+
+def split_stream(states):
+    """Like split_capture, for a growing capture: returns (packets, used),
+    where states[used:] may still hold an unfinished packet."""
+    out, i, n = [], 0, len(states)
+    used = 0
+    while i < n:
+        while i < n and states[i] != K:
+            i += 1
+        if i >= n:
+            break
+        j = i
+        while j + 1 < n and not (states[j] == SE0 and states[j + 1] == SE0):
+            j += 1
+        if j + 1 >= n:
+            break  # incomplete packet at the end of the capture
+        seg = states[i:j + 2] + [J]
+        used = j + 2
+        try:
+            pkt = decode_states(seg)
+            out.append((pkt, None if check_crc(pkt) else "CRC error"))
+        except UsbError as e:
+            out.append((None, str(e)))
+        i = j + 2
+    if i >= n:
+        used = n
+    return out, used
+
+
+def describe(packet):
+    """A short human-readable description of a packet."""
+    pid = packet[0] & 15
+    name = PID_NAMES.get(pid, f"PID{pid:x}")
+    if pid in (0x1, 0x9, 0xD):
+        v = packet[1] | packet[2] << 8
+        return f"{name} addr {v & 0x7F} endp {(v >> 7) & 15}"
+    if pid == 0x5:
+        return f"SOF frame {(packet[1] | packet[2] << 8) & 0x7FF}"
+    if pid in (0x3, 0xB, 0x7, 0xF):
+        return f"{name} {packet[1:-2].hex(' ')}"
+    return name
+
+
+HID_KEYS = {**{4 + i: chr(ord("a") + i) for i in range(26)},
+            **{30 + i: "1234567890"[i] for i in range(10)},
+            40: "\n", 41: "<esc>", 42: "<bksp>", 43: "\t", 44: " ", 45: "-", 46: "=",
+            47: "[", 48: "]", 49: "\\", 51: ";", 52: "'", 53: "`", 54: ",", 55: ".", 56: "/"}
+
+
+def hid_keys(report, previous=b""):
+    """Keys newly pressed in an 8-byte boot keyboard report (shift applied)."""
+    if len(report) != 8:
+        return ""
+    shift = report[0] & 0x22
+    out = ""
+    for code in report[2:]:
+        if code and code not in previous[2:]:
+            ch = HID_KEYS.get(code, f"<{code:#x}>")
+            out += ch.upper() if shift and len(ch) == 1 else ch
+    return out

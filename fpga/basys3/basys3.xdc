@@ -53,9 +53,11 @@ set_property -dict { PACKAGE_PIN A17  IOSTANDARD LVCMOS33 } [get_ports {JB[5]}]
 set_property -dict { PACKAGE_PIN C15  IOSTANDARD LVCMOS33 } [get_ports {JB[6]}]
 
 ## Pmod JC1-4: PEMU inputs ui_in[1], ui_in[2], ui_in[3], ui_in[7]
-## (pull-ups so an unconnected input reads as an idle UART line)
-set_property -dict { PACKAGE_PIN K17  IOSTANDARD LVCMOS33 PULLTYPE PULLUP } [get_ports {JC[0]}]
-set_property -dict { PACKAGE_PIN M18  IOSTANDARD LVCMOS33 PULLTYPE PULLUP } [get_ports {JC[1]}]
+## JC1/JC2 have no pull-ups: they are the USB sniffer's D+/D- and must not
+## load a USB line. JC3/JC4 have pull-ups so an unconnected input reads as an
+## idle UART line.
+set_property -dict { PACKAGE_PIN K17  IOSTANDARD LVCMOS33 } [get_ports {JC[0]}]
+set_property -dict { PACKAGE_PIN M18  IOSTANDARD LVCMOS33 } [get_ports {JC[1]}]
 set_property -dict { PACKAGE_PIN N17  IOSTANDARD LVCMOS33 PULLTYPE PULLUP } [get_ports {JC[2]}]
 set_property -dict { PACKAGE_PIN P18  IOSTANDARD LVCMOS33 PULLTYPE PULLUP } [get_ports {JC[3]}]
 

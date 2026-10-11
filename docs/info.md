@@ -23,6 +23,8 @@ more) are firmware, so new protocols can be added after the chip is made.
   timestamp counter; relocatable programs; single-step debugging; and an **on-chip loopback mode**, in which
   one engine can test the other with no external hardware.
 - **Packet RAM and DMA:** 128 words and one DMA channel per engine, so frames stream at wire speed.
+- **USB low-speed sniffer:** records and decodes USB keyboard/mouse traffic (firmware + ring-buffer DMA).
+- **Half-clock pin timing:** 10 ns output resolution at 50 MHz.
 - **10BASE-T Ethernet in firmware:** the chip can be plugged into a laptop and pinged (see
   docs/ethernet.md). Differential output pairs and any-edge waits make this possible.
 - **Host interface:** SPI slave (mode 0). The host loads programs, configures engines and moves data

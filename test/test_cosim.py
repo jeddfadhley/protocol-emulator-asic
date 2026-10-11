@@ -80,7 +80,7 @@ def random_engine_config(rng, e):
 
 def random_dma(rng):
     """A DMA register value: short transfers, either direction."""
-    return dma_word(rng.randrange(128), rng.choice([0, 1, 2, 4, 9, rng.randrange(256)]),
+    return dma_word(rng.randrange(128), rng.choice([0, 1, 2, 4, 9, 255, rng.randrange(256)]),
                     rng.random() < 0.5)
 
 

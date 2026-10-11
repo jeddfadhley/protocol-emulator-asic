@@ -25,6 +25,13 @@ except ImportError:
         import pemu_eth as eth
     except ImportError:
         eth = None
+try:  # likewise sw/pemu/usb.py as pemu_usb.py
+    from pemu import usb
+except ImportError:
+    try:
+        import pemu_usb as usb
+    except ImportError:
+        usb = None
 
 (A_CTRL, A_FLAGS, A_PIN_IN, A_PIN_OUT, A_PIN_OE, A_ID, A_PIN_SET, A_PIN_CLR,
  A_RAM_ADDR, A_RAM_DATA, A_DMA0, A_DMA1, A_FLAG_SET, A_FLAG_CLR, A_VERSION) = range(0x60, 0x6F)
@@ -222,6 +229,36 @@ class Pemu:
             if frames is not None and seen >= frames:
                 break
         return seen
+
+
+    # ----- USB low-speed sniffer -----
+
+    def usb_sniff_start(self):
+        """Start recording the USB pair on ui_in[1] (D+) and ui_in[2] (D-)."""
+        _desc, writes, enable, lb, _pins = DEMOS["USB_SNIFF"]
+        self.write(A_CTRL, 0)
+        for addr, value in writes:
+            self.write(addr, value)
+        self.dma(1, 0, 255, rx=True)        # ring buffer over the whole RAM
+        self.write(A_CTRL, enable | enable << 4)
+        self._usb_rd = 0
+        self._usb_states = []
+
+    def usb_sniff_poll(self):
+        """Packets captured since the last call: [(bytes or None, error)].
+        Call often: the ring holds 128 words (about 1000 bit times)."""
+        wr = self.read(A_DMA1) & 127
+        n = (wr - self._usb_rd) % 128
+        if n:
+            start = self._usb_rd
+            words = self.ram_read(start, min(n, 128 - start))
+            if n > len(words):
+                words += self.ram_read(0, n - len(words))
+            self._usb_rd = wr
+            self._usb_states += usb.capture_states(words)
+        found, used = usb.split_stream(self._usb_states)
+        self._usb_states = self._usb_states[used:]
+        return found
 
 
 def _ethdesc(f):

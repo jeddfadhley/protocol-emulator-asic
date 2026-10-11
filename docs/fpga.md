@@ -130,6 +130,24 @@ Ethernet commands:
 | `python3 -m pemu.fpga eth-send "hello"` | broadcasts a UDP packet (port 7777, from 192.168.7.2). Add `--count 10` to send several, one per second. Watch them arrive in Wireshark on the laptop. |
 | `python3 -m pemu.fpga eth-serve` | PEMU becomes 192.168.7.2 and answers ARP, ping and UDP echo (port 7). Every received frame is printed. Ctrl-C stops it. |
 
+### Sniff a USB keyboard
+
+`python3 -m pemu.fpga usb-sniff` records USB low-speed traffic (1.5 Mbit/s:
+most keyboards and mice) and decodes it. Typing on the keyboard prints the
+keys:
+
+```
+  DATA0 02 00 0b 00 00 00 00 00
+  keys: 'H'   typed so far: 'H'
+```
+
+Wiring: cut open a USB extension cable (or use a USB "pass-through"
+breakout) so the keyboard still plugs into a computer, and tap three wires
+without cutting them: **D+ (usually green) to JC1**, **D- (usually white) to
+JC2**, and **GND (black) to JC5**. PEMU only listens; the keyboard keeps
+working normally. `--all` also shows the polling traffic (IN, NAK, ACK)
+that the computer exchanges with the keyboard every 10 ms.
+
 ### Ping the chip
 
 1. Wire the RJ45 jack as in [section 7](#7-ethernet-wiring) and connect it to
@@ -178,8 +196,8 @@ Pins 5 and 11 are GND, pins 6 and 12 are 3.3 V.
 | 14 (out) | uo_out[6] | JB9 | C15 | output |
 | 8 (in) | ui_in[0] | JXADC1 / JXADC7 | J3 / K3 | differential input (XA1_P / XA1_N); Ethernet RD+ / RD- |
 | 0, 1 (copy) | uio[0], uio[1] | JXADC2 / JXADC8 | L3 / M3 | outputs, same as JA1/JA2 (released together with them); Ethernet TD+ / TD- without the 200 Ω resistors |
-| 9 (in) | ui_in[1] | JC1 | K17 | input, pull-up |
-| 10 (in) | ui_in[2] | JC2 | M18 | input, pull-up |
+| 9 (in) | ui_in[1] | JC1 | K17 | input, no pull-up; USB sniffer D+ |
+| 10 (in) | ui_in[2] | JC2 | M18 | input, no pull-up; USB sniffer D- |
 | 11 (in) | ui_in[3] | JC3 | N17 | input, pull-up |
 | 15 (in) | ui_in[7] | JC4 | P18 | input, pull-up |
 | host CS_N, SCK, MOSI, MISO | ui_in[4..6], uo_out[7] | inside the FPGA | | driven by the UART bridge |
@@ -324,5 +342,5 @@ docker run --rm -v "$PWD":/work -w /work/fpga/basys3 regymm/openxc7 make
   the on-chip 10BASE-T loopback (about 80 ms per round trip, mostly USB
   latency).
 - **Not yet tried:** Ethernet to a real laptop through an RJ45 jack (the
-  signal levels and a real PHY's response to the 40/60 ns half bits), UART
+  signal levels), UART
   output to a USB-serial adapter, I2C and WS2812 devices.

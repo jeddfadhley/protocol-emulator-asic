@@ -12,7 +12,7 @@ from .model import (A_CTRL, A_FLAGS, A_ID, A_PIN_CLR, A_PIN_OE, A_PIN_SET,
                     CHIP_ID, R_STATUS, R_X, engine_base)
 from . import eth, usb
 from .periph import (EthMonitor, EthSource, I2cTarget, PulseRecorder, SpiSlave, SquareWave,
-                     UartSink, UartSource, UsbLsMonitor)
+                     UartSink, UartSource, UsbLsMonitor, UsbLsSource)
 
 PROGRAMS = os.path.join(os.path.dirname(__file__), "..", "programs")
 
@@ -38,7 +38,8 @@ UART_RX_PIN = 11   # ui_in[3], the Tiny Tapeout UART RX convention
 SCK, MOSI, MISO, CS = 0, 1, 2, 3
 SDA, SCL = 4, 5
 LED_PIN = 13       # uo_out[5]
-USB_DP, USB_DM = 6, 7
+USB_DP, USB_DM = 6, 7     # transmit pair (uio[6], uio[7])
+USB_RX_DP = 9             # sniffer input: D+ on ui_in[1], D- on ui_in[2]
 EDGE_PIN = 8       # ui_in[0]
 ETH_TD = 0         # uio[0] = TD+, uio[1] = TD- (PINCFG.DIFF)
 ETH_RD = 8         # ui_in[0]: receive pair, after a comparator
@@ -270,28 +271,100 @@ async def single_step(b):
     assert (await b.read(engine_base(0) + R_X)) == 6
 
 
-async def usb_ls_tx(b):
-    """USB low-speed packets at exactly 1.5 Mbit/s (48 MHz clock, 32 clocks/bit)."""
-    mon = b.monitor(UsbLsMonitor(USB_DP, USB_DM, 32))
-    cfg = EngineConfig(clkdiv=7, out_base=USB_DP, set_base=USB_DP, out_count=2,
-                       set_count=2, autopull=True, y=3)
-    await b.setup(0, program("usb_ls_tx"), 0, cfg)
+USB_BIT = 33   # clocks per USB low-speed bit at 50 MHz (1.515 Mbit/s, +1.0%)
+
+
+def usb_tx_cfg():
+    return EngineConfig(clkdiv=10, out_base=USB_DP, set_base=USB_DP, out_count=2,
+                        set_count=2, autopull=True, y=3)
+
+
+def usb_rx_cfg(dp_pin=USB_RX_DP):
+    return EngineConfig(in_base=dp_pin, in_right=True, autopush=True, timeout=29, x=15, y=15)
+
+
+def usb_example_packets():
     get_descriptor = bytes([0x80, 0x06, 0x00, 0x01, 0x00, 0x00, 0x40, 0x00])
-    packets = [usb.token(usb.PID_SETUP, 0, 0),
-               usb.data_packet(usb.PID_DATA0, get_descriptor),
-               usb.handshake(usb.PID_ACK),
-               usb.data_packet(usb.PID_DATA1, b"\xff" * 4)]  # needs bit stuffing
+    return [usb.token(usb.PID_SETUP, 0, 0),
+            usb.data_packet(usb.PID_DATA0, get_descriptor),
+            usb.handshake(usb.PID_ACK),
+            usb.data_packet(usb.PID_DATA1, b"\xff" * 4)]  # needs bit stuffing
+
+
+async def usb_ls_tx(b):
+    """USB low-speed packets, every bit exactly 33 clocks at 50 MHz."""
+    mon = b.monitor(UsbLsMonitor(USB_DP, USB_DM, USB_BIT))
+    await b.setup(0, program("usb_ls_tx"), 0, usb_tx_cfg())
+    packets = usb_example_packets()
     words = []
     for p in packets:
         words += usb.to_words(usb.encode(p))
     for w in words[:3]:
         await b.push(0, w)
     await b.start(1)
-    await b.stream(0, words[3:], 8 * 32 + 8)  # slightly slower than the line rate
+    await b.stream(0, words[3:], 8 * USB_BIT + 8)  # slightly slower than the line rate
     await b.run_until(lambda: len(mon.packets) + len(mon.errors) >= len(packets), 50_000)
     assert not mon.errors, mon.errors
     assert mon.packets == packets, [p.hex() for p in mon.packets]
     assert not (await b.status(0)) & (1 << 14), "TX FIFO overflowed"
+
+
+async def usb_capture(b):
+    """Read the usb_ls_rx ring buffer (from RAM word 0) and decode it."""
+    end, _ = await b.dma_state(1)
+    words = await b.ram_read(0, end) if end else []
+    found = usb.split_capture(usb.capture_states(words))
+    return [p for p, err in found], [err for p, err in found if err]
+
+
+async def _usb_rx(b, **line):
+    """A USB device model sends packets; engine 1 records them; the host decodes."""
+    packets = usb_example_packets() + [usb.token(usb.PID_IN, 5, 1), usb.handshake(usb.PID_NAK),
+                                       usb.data_packet(usb.PID_DATA0, bytes([2, 0, 0x0B, 0x0C, 0, 0, 0, 0]))]
+    src = UsbLsSource(packets, **line)
+    await b.setup(1, program("usb_ls_rx"), 0, usb_rx_cfg())
+    await b.dma(1, 0, 255, rx=True)          # ring buffer
+    await b.start(2)
+    b.ui(src.dp, USB_RX_DP - 8)
+    b.ui(src.dm, USB_RX_DP - 7)
+    await b.run_until(lambda: src.done, 400_000)
+    await b.run(40 * USB_BIT)
+    got, errors = await usb_capture(b)
+    assert not errors, errors
+    assert got == packets, [p.hex() for p in got]
+
+
+async def usb_ls_rx(b):
+    await _usb_rx(b)
+
+
+async def usb_ls_rx_slow(b):
+    """The device's clock 1.2% slow, at a phase offset (USB allows 1.5%)."""
+    await _usb_rx(b, ppm=-12000, phase_ns=211.0)
+
+
+async def usb_ls_rx_fast(b):
+    """The device's clock 1.2% fast."""
+    await _usb_rx(b, ppm=12000, phase_ns=77.0)
+
+
+async def usb_loopback(b):
+    """Engine 0 transmits USB, engine 1 sniffs it through the on-chip loopback."""
+    await b.setup(0, program("usb_ls_tx"), 0, usb_tx_cfg())
+    await b.setup(1, program("usb_ls_rx"), 16, usb_rx_cfg(USB_DP))
+    await b.dma(1, 0, 255, rx=True)
+    packets = usb_example_packets()
+    words = []
+    for p in packets:
+        words += usb.to_words(usb.encode(p))
+    for w in words[:3]:
+        await b.push(0, w)
+    await b.start(3, loopback=True)
+    await b.stream(0, words[3:], 8 * USB_BIT + 8)
+    await b.run(60 * USB_BIT)
+    got, errors = await usb_capture(b)
+    assert not errors, errors
+    assert got == packets, [p.hex() for p in got]
 
 
 # ----- 10BASE-T Ethernet (50 MHz clock) -----
@@ -427,4 +500,5 @@ async def eth_ping(b):
 
 SCENARIOS = [check_id, uart_tx, uart_tx_timing, uart_rx, uart_loopback, spi, sd_cmd,
              i2c, i2c_timeout, ws2812, edge_stamp, single_step, usb_ls_tx,
-             eth_loopback, eth_tx, eth_rx, eth_rx_drift, eth_ping]
+             eth_loopback, eth_tx, eth_rx, eth_rx_drift, eth_ping,
+             usb_ls_rx, usb_ls_rx_slow, usb_ls_rx_fast, usb_loopback]

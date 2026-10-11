@@ -32,10 +32,10 @@ receiver locks onto those. At 50 MHz one bit is 5 clocks. The inner loop is
 
 ```
 bit:
-    mov pins, ~x   side 1 [1]   ; first half: inverted bit (2 ticks)
-    mov pins, x    side 1       ; second half: the bit (3 ticks with the next two)
-    out x, 1       side 1       ; next bit from the OSR (refilled by autopull + DMA)
-    jmp y--, bit   side 1
+    mov pins, ~x       side 1 [1]   ; first half: inverted bit (2.5 ticks)
+    mov pins, x late   side 1       ; second half: the bit, half a tick late
+    out x, 1           side 1       ; next bit from the OSR (refilled by autopull + DMA)
+    jmp y--, bit       side 1
 ```
 
 `PINCFG.DIFF` makes GPIO1 the inverse of GPIO0, so one `mov pins` drives
@@ -46,12 +46,12 @@ frames both wires are released, which puts 0 V across the transformer
 waits for the host doubles as a timer: every 12th timeout sends a 100 ns
 normal link pulse, one every 15.7 ms (the standard asks for 16 ± 8 ms).
 
-A bit is 5 clocks, so its halves cannot both be 2.5 clocks. The
-data-carrying mid-bit transitions are exactly 100 ns apart. The optional
-transitions between bits come 10 ns early (40/60 ns halves). That is
-outside the transmitter jitter limit in IEEE 802.3, but within the 13.5 ns
-a receiver must tolerate. If a PHY ever objects, the FPGA build can run at
-60 MHz with 3 + 3 tick halves.
+A bit is 5 clocks, so each half has to be 2.5 clocks. The mid-bit write is
+`mov pins, x late`: its pins change half a clock after the instruction, on
+the falling clock edge. So both halves of every bit are exactly 50 ns, as
+the standard specifies, from a 50 MHz clock. This half-clock timing is a
+general PEMU feature (every pin has 10 ns resolution), not an Ethernet
+special case.
 
 **Receive.** After each mid-bit edge, the bit is the line level just after
 it. The receiver waits for an edge (`wait any edge`), samples the line,
@@ -141,8 +141,8 @@ engine 0 transmits, engine 1 receives through the on-chip loopback.
 ## Verification
 
 - `eth_loopback`: the transmitter and receiver against each other, on-chip.
-- `eth_tx`: a link-partner model checks every bit cell (exactly 2 + 3
-  clocks), the preamble, TP_IDL length, link pulse width and spacing, and
+- `eth_tx`: a link-partner model samples the pins twice per clock and
+  checks every bit cell (two halves of exactly 50 ns), the preamble, TP_IDL length, link pulse width and spacing, and
   the FCS.
 - `eth_rx`, `eth_rx_drift`: frames from an independent clock (phase offset,
   +100 ppm, ±3 ns jitter), interleaved link pulses, and a frame longer than

@@ -23,15 +23,25 @@ class ModelSpi:
         self.core = Core()
         self.tx_trace = []           # PEMU pin 12 (UART TX demo) after each idle clock
         self.eth = EthMonitor(0, 1)  # a link partner on the TD+/TD- pair
+        self.usb = None              # optional UsbLsSource on ui_in[1] (D+), ui_in[2] (D-)
+
+    def clock(self, **bus):
+        """One clock with the pins wired up; returns the bus read data."""
+        c = self.core
+        wires, uio, _ = resolve(c.pin_out, c.pin_oe, 0, 0xFF)
+        early, _, _ = resolve(c.pad_early(), c.pin_oe, 0, 0xFF)
+        self.eth.step2(early, wires)
+        ui = 0xFF
+        if self.usb:
+            dp, dm = self.usb.dp.step(wires), self.usb.dm.step(wires)
+            ui = (ui & ~0b110) | dp << 1 | dm << 2
+        r = c.clock(ui_in=ui, uio_in=uio, **bus)
+        self.tx_trace.append(c.pin_out >> 12 & 1)
+        return r
 
     def idle(self, clocks):
         for _ in range(clocks):
-            c = self.core
-            wires, uio, _ = resolve(c.pin_out, c.pin_oe, 0, 0xFF)
-            early, _, _ = resolve(c.pad_early(), c.pin_oe, 0, 0xFF)
-            self.eth.step2(early, wires)
-            c.clock(ui_in=0xFF, uio_in=uio)
-            self.tx_trace.append(c.pin_out >> 12 & 1)
+            self.clock()
 
     def transaction(self, data):
         cmd, payload = data[0], data[1:]
@@ -39,11 +49,11 @@ class ModelSpi:
         rx = bytearray(1)
         for i in range(0, len(payload) - 1, 2):
             if rd:
-                w = self.core.clock(re=True, addr=addr)
-                self.core.clock(rc=True, addr=addr)
+                w = self.clock(re=True, addr=addr)
+                self.clock(rc=True, addr=addr)
                 rx += bytes((w >> 8, w & 0xFF))
             else:
-                self.core.clock(we=True, addr=addr, wdata=payload[i] << 8 | payload[i + 1])
+                self.clock(we=True, addr=addr, wdata=payload[i] << 8 | payload[i + 1])
             if not is_port(addr):
                 addr = (addr + 1) & 0x7F
         rx += bytes(len(data) - len(rx))          # odd trailing byte reads 0
@@ -212,3 +222,18 @@ def test_cli_eth_send_puts_a_frame_on_the_wire(link):
     assert not mon.errors and len(mon.frames) == 1, mon.errors
     f = mon.frames[0]
     assert eth.fcs_ok(f) and eth.parse_udp(f[:-4])[-1] == b"hello wireshark"
+
+
+def test_cli_usb_sniff_decodes_a_keyboard(link):
+    """A keyboard model types "Hi" (shift+h, i); the sniffer prints the keys."""
+    from pemu import usb
+    from pemu.periph import UsbLsSource
+    rep = lambda mod, key: usb.data_packet(usb.PID_DATA0, bytes([mod, 0, key, 0, 0, 0, 0, 0]))
+    traffic = []
+    for r in (rep(2, 0x0B), rep(0, 0), rep(0, 0x0C), rep(0, 0)):
+        traffic += [usb.token(usb.PID_IN, 3, 1), r, usb.handshake(usb.PID_ACK)]
+    link.ser.spi.usb = UsbLsSource(traffic, gap_bits=30, start_bits=1000)  # after setup
+    rc, out = run(["usb-sniff", "--polls", "300"], link)
+    assert rc == 0, out
+    assert "typed so far: 'Hi'" in out, out
+    assert "! " not in out, out

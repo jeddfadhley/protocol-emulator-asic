@@ -57,6 +57,7 @@ carry a `side` value, and the delay field shrinks to `5 - n` bits.
 | `push [iffull] [block\|noblock]` | ISR to the RX FIFO |
 | `pull [ifempty] [block\|noblock]` | TX FIFO to the OSR |
 | `mov <dst>, [~\|::]<src>` | dst: `pins x y crc pindirs pc isr osr`; `~` inverts, `::` bit-reverses |
+| `mov pins, <src> late` | like `mov pins`, but the pins change half a clock later (10 ns resolution at 50 MHz) |
 | `set <dst>, <0-31>` | dst: `pins x y pindirs` |
 | `set flag, <n>` / `clr flag, <n>` | raise or clear event flag n |
 | `nop` | `mov y, y` |
@@ -118,6 +119,11 @@ bit-banged SPI from MicroPython.
   `RAM_DATA`) and start the engine's DMA channel (`DMA0`/`DMA1`). The DMA
   keeps the TX FIFO full, or empties the RX FIFO into the RAM, with no host
   traffic. `eth_tx` and `eth_rx` work this way.
+- **Half-clock timing:** `mov pins, x late` places an edge between two clock
+  edges. `eth_tx` uses it for 50 ns half bits from a 50 MHz clock.
+- **Continuous capture:** a DMA `COUNT` of 255 never runs out: the channel
+  writes the packet RAM as a ring buffer and the host follows `ADDR`
+  (`usb_ls_rx` sniffing works this way).
 - **Differential outputs:** set `PINCFG.DIFF` and pin `OUT_BASE + 1` always
   carries the inverse of `OUT_BASE`, and the same direction.
 - **Re-lock on every edge:** a receiver that runs `wait any edge` before
@@ -139,3 +145,4 @@ bit-banged SPI from MicroPython.
 | `edge_stamp.pasm` | edge waits plus TIME capture (logic analyser) |
 | `usb_ls_tx.pasm` | USB low-speed packets at exactly 1.5 Mbit/s |
 | `eth_tx.pasm`, `eth_rx.pasm` | 10BASE-T Ethernet: Manchester, link pulses, SFD hunt, DMA ([ethernet.md](ethernet.md)) |
+| `usb_ls_rx.pasm` | USB low-speed receiver/sniffer: re-sync on every edge, timeout-driven sampling, ring DMA |

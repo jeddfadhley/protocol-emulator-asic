@@ -255,7 +255,9 @@ RAM and that engine's FIFOs with no host involvement:
   `RAM_DATA` in the same clock.
 
 A channel is active while `COUNT` is non-zero. Each transfer moves one word,
-increments `ADDR` (mod 128) and decrements `COUNT`. At most one transfer
+increments `ADDR` (mod 128) and decrements `COUNT`. A `COUNT` of 255 never
+decrements: the channel runs forever as a ring buffer, and the host follows
+`ADDR` (used for continuous capture, e.g. the USB sniffer). At most one transfer
 happens per clock: channel 0 goes first if it can transfer, otherwise channel
 1. A host write to a `DMAn` register in the same clock as a transfer wins
 over the channel's own update; FLUSH empties the FIFOs after any transfer

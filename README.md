@@ -5,8 +5,9 @@
 PEMU is an open-source chip that speaks hardware protocols in firmware. Two
 small engines run programs whose instructions drive and sample pins with
 **cycle-exact, formally proven timing**. UART, SPI, I2C, WS2812, SD card
-commands, USB low-speed and **10 Mbit/s Ethernet** are just programs, and
-new protocols need no new silicon.
+commands, USB low-speed (both directions) and **10 Mbit/s Ethernet** are
+just programs, all from one 50 MHz clock, and new protocols need no new
+silicon.
 
 **Plug it into a laptop and `ping` it.** About thirty instructions of
 firmware speak 10BASE-T, with no Ethernet hardware on the chip
@@ -27,7 +28,8 @@ on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in a
 | **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at 50 MHz (typical silicon; see [timing](docs/verification.md#6-physical-implementation)) |
 | **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs, all with 2-flop synchronizers |
 | **Host link** | SPI slave: load programs, configure, stream data, debug |
-| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX, 10BASE-T Ethernet TX/RX |
+| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX |
+| **Timing resolution** | 10 ns on every output pin at 50 MHz (half-clock `late` writes) |
 
 ### What is new compared with RP2040 PIO and TI PRU
 
@@ -46,6 +48,9 @@ at robust protocols and at being verifiable:
 - **Wire-speed packet engine.** A packet RAM with per-engine DMA feeds the
   engines one word per clock if needed, so a 10 Mbit/s frame never waits for
   the slow host link. PIO's FIFOs need a CPU or DMA outside the block.
+- **Half-clock output timing.** `mov pins, x late` moves an edge to the
+  falling clock edge. That is how a 50 MHz chip sends 10BASE-T bits with
+  two exact 50 ns halves.
 - **Differential pairs and any-edge waits.** `PINCFG.DIFF` drives a pair from
   one bit (10BASE-T, RS-485), and `wait any edge` re-locks a receiver's
   timing on every transition, which is how `eth_rx` decodes Manchester at
@@ -102,7 +107,9 @@ at robust protocols and at being verifiable:
   netlist in CI.
 - **Formal proofs** (BMC + k-induction) of cycle exactness, FIFO safety and
   ordering, trap behaviour, and that nothing moves between ticks.
-- **Mutation testing.** All 37 deliberately planted RTL bugs are caught.
+- **Mutation testing.** All 43 deliberately planted RTL bugs are caught.
+- **Runs on real hardware:** the same RTL on a Basys 3 FPGA passes the
+  UART and Ethernet self-tests and 100/100 Ethernet frames.
 - **Layout signed off** in Tiny Tapeout CI: DRC, LVS, antenna and precheck
   clean, with the chip tests re-run on the gate-level netlist.
 
@@ -149,9 +156,10 @@ Ethernet wiring.
 
 ## Limitations and future work
 
-- USB low-speed **receive** is not written yet. With `wait any edge`, the
-  packet RAM and DMA the hardware now has what it needs (the receiver can
-  re-lock on every transition, like `eth_rx`).
+- USB is low speed only (1.5 Mbit/s), and the chip records and sends
+  packets but leaves the protocol to the host, which is too far away to
+  answer a USB host within the bus turnaround time. So PEMU sniffs and
+  injects USB traffic, but does not enumerate as a device.
 - Ethernet frames are limited to 124 bytes received and 117 sent by the
   packet RAM, and the link is half duplex with no collision detection.
 - No ALU: arithmetic is done on the host, and firmware branches on bits with

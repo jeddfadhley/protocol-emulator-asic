@@ -65,10 +65,10 @@ module pe_dma (
   assign pop0     = go0 && rx0;
   assign pop1     = go1 && rx1;
 
-  // ADDR + 1 (mod 128), COUNT - 1, DIR kept
+  // ADDR + 1 (mod 128), COUNT - 1 unless it is 255 (ring buffer), DIR kept
   function [15:0] advance(input [15:0] d);
     begin
-      advance = {d[15], d[14:7] - 8'd1, d[6:0] + 7'd1};
+      advance = {d[15], (d[14:7] == 8'd255) ? 8'd255 : d[14:7] - 8'd1, d[6:0] + 7'd1};
     end
   endfunction
 
@@ -114,7 +114,7 @@ module pe_dma (
       // Each transfer advances its channel by exactly one word
       if (!$past(reg_we0)) begin
         if ($past(push0 || pop0)) begin
-          assert (dma0[14:7] == $past(dma0[14:7]) - 8'd1);
+          assert (dma0[14:7] == $past(dma0[14:7]) - {7'd0, $past(dma0[14:7]) != 8'd255});
           assert (dma0[6:0] == $past(dma0[6:0]) + 7'd1);
         end else begin
           assert (dma0 == $past(dma0));
@@ -123,7 +123,7 @@ module pe_dma (
       end
       if (!$past(reg_we1)) begin
         if ($past(push1 || pop1)) begin
-          assert (dma1[14:7] == $past(dma1[14:7]) - 8'd1);
+          assert (dma1[14:7] == $past(dma1[14:7]) - {7'd0, $past(dma1[14:7]) != 8'd255});
           assert (dma1[6:0] == $past(dma1[6:0]) + 7'd1);
         end else begin
           assert (dma1 == $past(dma1));

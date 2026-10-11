@@ -471,3 +471,64 @@ class EthSource:
     @property
     def done(self):
         return self.k >= len(self.edges)
+
+
+class UsbLsSource:
+    """USB low-speed traffic on a D+/D- pair, from an independent clock.
+
+    Packets (bytes after SYNC) are line-coded by an encoder written here
+    (not pemu.usb.encode) and sent at 1.5 Mbit/s * (1 + ppm), starting at
+    `phase_ns`, with `gap_bits` idle (J) bit times between packets and an
+    occasional keep-alive EOP. Attach `.dp` and `.dm` to two ui_in bits:
+    bench.ui(src.dp, 1); bench.ui(src.dm, 2) (D+ first: it advances time).
+    """
+
+    J, K, SE0 = (0, 1), (1, 0), (0, 0)   # (D+, D-)
+
+    def __init__(self, packets, ppm=0.0, phase_ns=0.0, gap_bits=40, keepalive=True,
+                 start_bits=20):
+        bit_ns = 1e9 / 1.5e6 * (1 + ppm * 1e-6)
+        states = [self.J] * start_bits
+        for k, p in enumerate(packets):
+            states += self._encode(p) + [self.J] * gap_bits
+            if keepalive and k % 2 == 1:  # a low-speed keep-alive: SE0 for 2 bits
+                states += [self.SE0, self.SE0] + [self.J] * gap_bits
+        self.states, self.bit_ns, self.t, self.phase = states, bit_ns, 0.0, phase_ns
+        self.cur = self.J
+        parent = self
+
+        class _Pin:
+            def __init__(self, idx, advance):
+                self.idx, self.advance = idx, advance
+
+            def step(self, wires):
+                if self.advance:
+                    parent._advance()
+                return parent.cur[self.idx]
+
+        self.dp, self.dm = _Pin(0, True), _Pin(1, False)
+
+    @classmethod
+    def _encode(cls, packet):
+        bits = [0, 0, 0, 0, 0, 0, 0, 1]  # SYNC
+        for byte in packet:
+            bits += [(byte >> i) & 1 for i in range(8)]
+        line, level, run = [], cls.J, 0
+        for b in bits:
+            for bb in ([b, 0] if b and run == 5 else [b]):   # stuff after six 1s
+                if bb == 0:
+                    level = cls.K if level == cls.J else cls.J
+                    run = 0
+                else:
+                    run += 1
+                line.append(level)
+        return line + [cls.SE0, cls.SE0, cls.J]
+
+    def _advance(self):
+        self.t += 20.0
+        k = int((self.t - self.phase) // self.bit_ns)
+        self.cur = self.states[k] if 0 <= k < len(self.states) else self.J
+
+    @property
+    def done(self):
+        return self.t - self.phase > len(self.states) * self.bit_ns

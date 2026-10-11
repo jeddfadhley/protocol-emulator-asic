@@ -545,7 +545,8 @@ class Core:
                 dma_pop[c] = True
             else:
                 dma_push[c] = self.ram[daddr]
-            dma_next[c] = dma_word(daddr + 1, dcount - 1, drx)
+            # COUNT 255 is a ring buffer: it never runs out
+            dma_next[c] = dma_word(daddr + 1, dcount if dcount == 255 else dcount - 1, drx)
             break
 
         # FIFOs

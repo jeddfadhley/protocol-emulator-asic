@@ -15,7 +15,7 @@ and every layer runs in CI on each push (`.github/workflows/test.yaml`).
  (model)                       │      RTL driven through its real SPI pins
                                │
                      formal proofs (BMC + k-induction)
-                     mutation testing (37 planted bugs)
+                     mutation testing (43 planted bugs)
                      gate-level re-run of the chip tests (CI)
 ```
 
@@ -41,6 +41,9 @@ levels and sticky flags.
   are compared too. Every 16-bit word is a legal
   instruction, so random programs exercise the whole encoding space,
   reserved encodings included.
+- **Pads in both clock halves:** the co-simulation compares the pins the
+  chip actually drives in the first and the second half of every clock, so
+  half-clock (`late`) writes are checked against the model too.
 - **Directed sweep:** small loops cover every IN/OUT bit count
   (1, 2, 3, 5, 8, 15, 16) against every push/pull threshold, for both
   autopush/autopull and the explicit `iffull`/`ifempty` forms.
@@ -84,9 +87,14 @@ Each scenario runs twice with identical code:
 | `single_step` | debug stepping with PC visible after every tick |
 | `usb_ls_tx` | SETUP, DATA0 (GET_DESCRIPTOR), ACK, stuffed DATA1 at exactly 1.5 Mbit/s |
 | `eth_loopback` | a 10BASE-T frame from engine 0 to engine 1 on-chip, FCS intact |
-| `eth_tx` | every bit exactly 2 + 3 clocks, preamble, TP_IDL, link pulse width and spacing |
+| `eth_tx` | pins sampled twice per clock: every half bit exactly 50 ns, preamble, TP_IDL, link pulses |
 | `eth_rx`, `eth_rx_drift` | frames from an independent clock: phase, +100 ppm, jitter, link pulses, oversize frame |
 | `eth_ping` | a laptop model sends ARP and ping; the host code answers through the chip |
+| `usb_ls_rx`, `_slow`, `_fast` | a USB device model (its own encoder, ±1.2% clock, keep-alives) sends 7 packets; the sniffer's ring buffer decodes them all |
+| `usb_loopback` | engine 0 sends USB, engine 1 sniffs it on-chip |
+
+The USB receiver decodes every packet at every phase with the sender's
+clock off by up to ±2% (USB allows ±1.5%).
 
 The Ethernet receiver also has a tolerance test: every sender clock phase,
 ±2000 ppm, ±4 ns of jitter on every edge, all frames must arrive intact
@@ -111,7 +119,10 @@ Engine:
 - only a `WAIT ... timeout` can trap, and a trap lands on `TRAP` with
   `TIMED_OUT` set;
 - TIME counts ticks exactly, and the clock divider spaces ticks
-  `CLKDIV + 1` clocks apart.
+  `CLKDIV + 1` clocks apart;
+- the divider compare that is computed a clock early (for timing) always
+  equals `divcnt >= clkdiv`;
+- late-pin flags only ever mark pins that are being written.
 
 DMA (`pe_dma`):
 - it never pushes a full FIFO or pops an empty one, and never collides with
@@ -133,12 +144,14 @@ assumed. It is assumed only when the FIFO is checked on its own.
 ## 5. Mutation testing (`test/mutate.py`)
 
 Mutation testing asks whether the tests would notice a bug. The script
-plants 37 realistic bugs, one at a time, and reruns the relevant tests. The
+plants 43 realistic bugs, one at a time, and reruns the relevant tests. The
 bugs include an off-by-one in a threshold, a missing decrement, a wrong CRC
 tap, a missing synchronizer stage, broken engine priority, and an SPI pop on
 the wrong clock edge, plus 12 for v2: DMA priority and address bugs, RAM
 port bugs, a differential pin that is not inverted, an any-edge wait
-compared with the wrong level. **All 37 are caught.**
+compared with the wrong level, and 6 for the timing work (late pins that are
+not late, a mis-wired STEP pulse, a ring buffer that runs out...). **All 43
+are caught.**
 
 The first run caught 24. The survivor, a PUSH `iffull` off by one, led to the
 directed threshold sweep in section 2. For v2, the first run caught 10 of
@@ -168,6 +181,21 @@ The flow optimises timing at the typical corner, as is usual for Tiny
 Tapeout, so 50 MHz is the design's typical rating. All protocol firmware
 except the USB demo (which needs 48 MHz for exact 1.5 Mbit/s) runs at any
 clock by recomputing `CLKDIV`.
+
+## 7. Timing closure
+
+The first v1 layout met 50 MHz on typical silicon but not on the slow
+corner (1.08 V, 125 °C: -9.4 ns). The report showed why: the worst paths
+started at the host bus address register and ran through the CTRL decode
+(the STEP and RESTART pulses) into every engine's next-state logic, and
+the timing repair was only run at the typical corner. The fixes:
+
+- CTRL pulses act on the clock after the write, so the host bus no longer
+  reaches the engines combinationally (spec updated).
+- The clock divider compare is computed a clock early, with a formal proof
+  that it always equals the original.
+- The resizer now optimises the slow, typical and fast corners
+  (`RSZ_CORNERS` in `src/config.json`).
 
 ## Bugs found by this process
 
