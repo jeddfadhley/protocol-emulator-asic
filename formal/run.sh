@@ -20,6 +20,13 @@ check() {
   tail -1 build/$top.ind.log
 }
 
+# The hardening flow rejects designs that fail Yosys's structural checks
+# (e.g. a variable driven from two always blocks): check both build variants.
+for v in "" -DPEMU_LUTRAM; do
+  yosys -q -p "read_verilog $v $SRC/project.v $SRC/pe_spi.v $SRC/pe_core.v $SRC/pe_engine.v $SRC/pe_fifo.v $SRC/pe_dma.v; hierarchy -top tt_um_jeddfadhley_protocol_emu; proc; check -assert"
+  echo "== yosys check $v: passed"
+done
+
 check pe_fifo   -DFORMAL_FIFO_TOP $SRC/pe_fifo.v
 check pe_engine ""                $SRC/pe_fifo.v $SRC/pe_engine.v
 check pe_dma    ""                $SRC/pe_dma.v

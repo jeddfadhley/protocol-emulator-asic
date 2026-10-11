@@ -25,7 +25,7 @@ read_verilog [file join $script_dir pemu_basys3.v]
 read_xdc     [file join $script_dir basys3.xdc]
 
 # ---------------------------------------------------------------- synthesis
-synth_design -top $top -part $part -include_dirs $src_dir
+synth_design -top $top -part $part -include_dirs $src_dir -verilog_define PEMU_LUTRAM
 write_checkpoint -force [file join $out_dir post_synth.dcp]
 report_utilization -file [file join $out_dir utilization_synth.rpt]
 

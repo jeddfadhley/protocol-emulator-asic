@@ -178,7 +178,6 @@ module pe_core (
   wire [7:0]  fl_e0  = (flags & ~fc0) | fs0;
   wire [7:0]  fl_e1  = (fl_e0 & ~fc1) | fs1;
 
-  integer i;
   always @(posedge clk) begin
     if (!rst_n) begin
       ctrl    <= 3'b000;
@@ -187,7 +186,6 @@ module pe_core (
       pin_oe  <= 16'h0000;
       sync1   <= 16'h0000;
       sync2   <= 16'h0000;
-      for (i = 0; i < 64; i = i + 1) imem[i] <= 16'h0000;
       ram_addr <= 7'd0;
     end else begin
       sync1   <= pins_ext;
@@ -196,7 +194,6 @@ module pe_core (
       pin_oe  <= oe_e1;
       flags   <= fl_e1;
       if (bus_we) begin
-        if (!bus_addr[6]) imem[bus_addr[5:0]] <= bus_wdata;
         case (bus_addr)
           A_CTRL:    ctrl <= bus_wdata[2:0];
           A_FLAGS:   flags <= bus_wdata[7:0];
@@ -215,18 +212,43 @@ module pe_core (
     end
   end
 
-  // Packet RAM: one write per clock, from the host port or an RX transfer
-  // (pe_dma never does both in the same clock)
+  // Memories. The instruction memory is written by the host; the packet
+  // RAM by the host port or an RX transfer (pe_dma never does both in the
+  // same clock). On the chip both are flip-flops cleared by reset. FPGA
+  // builds define PEMU_LUTRAM: no reset, so they map to LUT RAM, and they
+  // start at zero from the bitstream.
+`ifdef PEMU_LUTRAM
   integer k;
+  initial begin
+    for (k = 0; k < 64; k = k + 1) imem[k] = 16'h0000;
+    for (k = 0; k < 128; k = k + 1) pram[k] = 16'h0000;
+  end
+  always @(posedge clk) begin
+    if (rst_n && bus_we && !bus_addr[6]) imem[bus_addr[5:0]] <= bus_wdata;
+  end
+  always @(posedge clk) begin
+    if (rst_n && host_ram_we) pram[ram_addr] <= bus_wdata;
+    else if (rst_n && dma_ram_we) pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;
+  end
+`else
+  integer ki, kp;  // one loop variable per always block (Yosys check)
   always @(posedge clk) begin
     if (!rst_n) begin
-      for (k = 0; k < 128; k = k + 1) pram[k] <= 16'h0000;
+      for (ki = 0; ki < 64; ki = ki + 1) imem[ki] <= 16'h0000;
+    end else if (bus_we && !bus_addr[6]) begin
+      imem[bus_addr[5:0]] <= bus_wdata;
+    end
+  end
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      for (kp = 0; kp < 128; kp = kp + 1) pram[kp] <= 16'h0000;
     end else if (host_ram_we) begin
       pram[ram_addr] <= bus_wdata;
     end else if (dma_ram_we) begin
       pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;
     end
   end
+`endif
 
   // ---------------------------------------------------------------------
   // Host reads

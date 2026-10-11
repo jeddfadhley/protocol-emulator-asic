@@ -42,7 +42,7 @@ CHIPDB  := $(CHIPDB_DIR)/$(DBPART).bin
 all: $(PROJECT).bit
 
 $(PROJECT).json: $(SOURCES)
-	yosys -q -l yosys.log -p "$(YOSYS_PRE) read_verilog $(SOURCES); synth_xilinx $(SYNTH_FLAGS) -arch xc7 -top $(PROJECT); write_json $@"
+	yosys -q -l yosys.log -p "$(YOSYS_PRE) read_verilog -DPEMU_LUTRAM $(SOURCES); synth_xilinx $(SYNTH_FLAGS) -arch xc7 -top $(PROJECT); write_json $@"
 
 # The chip database is generated once per device (about 15 s).
 $(CHIPDB):
