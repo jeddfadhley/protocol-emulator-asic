@@ -1,0 +1,11 @@
+chipdb/
+*.json
+*.fasm
+*.frames
+*.bit
+*.log
+*.jou
+*.dcp
+*.rpt
+build/
+.Xil/

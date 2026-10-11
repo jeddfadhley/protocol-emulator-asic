@@ -88,6 +88,7 @@ at robust protocols and at being verifiable:
 - [docs/ethernet.md](docs/ethernet.md): 10BASE-T on PEMU: firmware, wiring, measured tolerance
 - [docs/fpga.md](docs/fpga.md): run PEMU on a Basys 3 FPGA board from your laptop
 - [docs/info.md](docs/info.md): Tiny Tapeout datasheet page
+- [docs/fpga.md](docs/fpga.md): running PEMU on a Basys 3 FPGA board
 
 ## Verification at a glance
 
@@ -131,6 +132,20 @@ make TB=core                                 # RTL vs model co-simulation
 
 On the demo board, copy `sw/board/pemu_board.py` and `sw/board/pemu_demos.py`
 to the RP2040 and run `import pemu_board; pemu_board.selftest()`.
+
+## Run it on a Basys 3
+
+The unmodified chip design also runs on a Digilent Basys 3 FPGA board, driven
+from a Mac over the board's USB cable. GitHub Actions builds the bitstream
+(artifact `pemu_basys3`) with open-source tools; then:
+
+```bash
+openFPGALoader -b basys3 pemu_basys3.bit
+cd sw && python3 -m pemu.fpga selftest
+```
+
+See [docs/fpga.md](docs/fpga.md) for the step-by-step guide, pin map and
+Ethernet wiring.
 
 ## Limitations and future work
 
