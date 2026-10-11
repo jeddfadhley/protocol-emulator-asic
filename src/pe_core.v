@@ -6,7 +6,8 @@
 `default_nettype none
 
 // PEMU core: 64-word instruction memory, two engines, pin registers, event
-// flags and the host register bus. Matches sw/pemu/model.py (Core).
+// flags, the packet RAM with its DMA channels and the host register bus.
+// Matches sw/pemu/model.py (Core).
 module pe_core (
     input  wire        clk,
     input  wire        rst_n,
@@ -27,10 +28,14 @@ module pe_core (
 );
 
   localparam A_CTRL = 7'h60, A_FLAGS = 7'h61, A_PIN_IN = 7'h62, A_PIN_OUT = 7'h63,
-             A_PIN_OE = 7'h64, A_ID = 7'h65, A_PIN_SET = 7'h66, A_PIN_CLR = 7'h67;
-  localparam [15:0] CHIP_ID = 16'h5045;
+             A_PIN_OE = 7'h64, A_ID = 7'h65, A_PIN_SET = 7'h66, A_PIN_CLR = 7'h67,
+             A_RAM_ADDR = 7'h68, A_RAM_DATA = 7'h69, A_DMA0 = 7'h6A, A_DMA1 = 7'h6B,
+             A_FLAG_SET = 7'h6C, A_FLAG_CLR = 7'h6D, A_VERSION = 7'h6E;
+  localparam [15:0] CHIP_ID = 16'h5045, VERSION = 16'h0002;
 
   reg [15:0] imem[0:63];
+  reg [15:0] pram[0:127];  // packet RAM
+  reg [6:0]  ram_addr;     // host port address
   reg [2:0]  ctrl;  // [1:0] engine enables, [2] loopback
   reg [7:0]  flags;
   reg [15:0] sync1, sync2;
@@ -57,6 +62,47 @@ module pe_core (
   wire [15:0] rdata0, rdata1;
   wire [15:0] om0, ov0, em0, ev0, om1, ov1, em1, ev1;
   wire [7:0]  fs0, fc0, fs1, fc1;
+  wire [2:0]  txl0, txl1, rxl0, rxl1;
+  wire [15:0] rxw0, rxw1;
+
+  // ---------------------------------------------------------------------
+  // DMA
+
+  wire        host_push0   = bus_we && bus_addr == 7'h4F;
+  wire        host_push1   = bus_we && bus_addr == 7'h5F;
+  wire        host_commit0 = bus_rc && bus_addr == 7'h4F;
+  wire        host_commit1 = bus_rc && bus_addr == 7'h5F;
+  wire        host_ram_we  = bus_we && bus_addr == A_RAM_DATA;
+  wire [15:0] dma0, dma1;
+  wire [6:0]  dma_addr;
+  wire        dma_ram_we, dma_sel1, dpush0, dpush1, dpop0, dpop1;
+  wire [15:0] dma_rdata = pram[dma_addr];
+
+  pe_dma u_dma (
+      .clk         (clk),
+      .rst_n       (rst_n),
+      .tx_level0   (txl0),
+      .tx_level1   (txl1),
+      .rx_level0   (rxl0),
+      .rx_level1   (rxl1),
+      .host_push0  (host_push0),
+      .host_push1  (host_push1),
+      .host_commit0(host_commit0),
+      .host_commit1(host_commit1),
+      .host_ram_we (host_ram_we),
+      .reg_we0     (bus_we && bus_addr == A_DMA0),
+      .reg_we1     (bus_we && bus_addr == A_DMA1),
+      .wdata       (bus_wdata),
+      .dma0        (dma0),
+      .dma1        (dma1),
+      .ram_addr    (dma_addr),
+      .ram_we      (dma_ram_we),
+      .sel1        (dma_sel1),
+      .push0       (dpush0),
+      .push1       (dpush1),
+      .pop0        (dpop0),
+      .pop1        (dpop1)
+  );
 
   pe_engine u_e0 (
       .clk       (clk),
@@ -81,7 +127,13 @@ module pe_core (
       .oe_mask   (em0),
       .oe_val    (ev0),
       .flag_set  (fs0),
-      .flag_clr  (fc0)
+      .flag_clr  (fc0),
+      .dma_push  (dpush0),
+      .dma_wdata (dma_rdata),
+      .dma_pop   (dpop0),
+      .tx_level  (txl0),
+      .rx_level  (rxl0),
+      .rx_word   (rxw0)
   );
 
   pe_engine u_e1 (
@@ -107,7 +159,13 @@ module pe_core (
       .oe_mask   (em1),
       .oe_val    (ev1),
       .flag_set  (fs1),
-      .flag_clr  (fc1)
+      .flag_clr  (fc1),
+      .dma_push  (dpush1),
+      .dma_wdata (dma_rdata),
+      .dma_pop   (dpop1),
+      .tx_level  (txl1),
+      .rx_level  (rxl1),
+      .rx_word   (rxw1)
   );
 
   // ---------------------------------------------------------------------
@@ -130,6 +188,7 @@ module pe_core (
       sync1   <= 16'h0000;
       sync2   <= 16'h0000;
       for (i = 0; i < 64; i = i + 1) imem[i] <= 16'h0000;
+      ram_addr <= 7'd0;
     end else begin
       sync1   <= pins_ext;
       sync2   <= sync1;
@@ -145,9 +204,26 @@ module pe_core (
           A_PIN_OE:  pin_oe <= bus_wdata;
           A_PIN_SET: pin_out <= out_e1 | bus_wdata;
           A_PIN_CLR: pin_out <= out_e1 & ~bus_wdata;
+          A_FLAG_SET: flags <= fl_e1 | bus_wdata[7:0];
+          A_FLAG_CLR: flags <= fl_e1 & ~bus_wdata[7:0];
+          A_RAM_ADDR: ram_addr <= bus_wdata[6:0];
+          A_RAM_DATA: ram_addr <= ram_addr + 7'd1;
           default: ;
         endcase
       end
+      if (bus_rc && bus_addr == A_RAM_DATA) ram_addr <= ram_addr + 7'd1;
+    end
+  end
+
+  // Packet RAM: one write per clock, from the host port or an RX transfer
+  // (pe_dma never does both in the same clock)
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      for (i = 0; i < 128; i = i + 1) pram[i] <= 16'h0000;
+    end else if (host_ram_we) begin
+      pram[ram_addr] <= bus_wdata;
+    end else if (dma_ram_we) begin
+      pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;
     end
   end
 
@@ -167,6 +243,11 @@ module pe_core (
         A_PIN_OUT: bus_rdata = pin_out;
         A_PIN_OE:  bus_rdata = pin_oe;
         A_ID:      bus_rdata = CHIP_ID;
+        A_RAM_ADDR: bus_rdata = {9'd0, ram_addr};
+        A_RAM_DATA: bus_rdata = pram[ram_addr];
+        A_DMA0:    bus_rdata = dma0;
+        A_DMA1:    bus_rdata = dma1;
+        A_VERSION: bus_rdata = VERSION;
         default:   bus_rdata = 16'h0000;
       endcase
     end

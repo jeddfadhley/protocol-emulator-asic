@@ -19,3 +19,4 @@ formal/build/
 __pycache__/
 .pytest_cache/
 test/results_cosim.xml
+.claude/

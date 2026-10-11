@@ -39,7 +39,16 @@ module pe_engine (
     output reg  [15:0] oe_mask,
     output reg  [15:0] oe_val,
     output reg  [7:0]  flag_set,
-    output reg  [7:0]  flag_clr
+    output reg  [7:0]  flag_clr,
+
+    // DMA channel (pe_dma guarantees it never overflows or underflows a
+    // FIFO and never collides with a host access to the same FIFO)
+    input  wire        dma_push,
+    input  wire [15:0] dma_wdata,
+    input  wire        dma_pop,
+    output wire [2:0]  tx_level,
+    output wire [2:0]  rx_level,
+    output wire [15:0] rx_word
 );
 
   // ---------------------------------------------------------------------
@@ -99,13 +108,13 @@ module pe_engine (
              R_STATUS = 4'hD, R_TIME = 4'hE, R_FIFO = 4'hF;
 
   reg [15:0] clkdiv, prog, pinmap, timeout, crcpoly;
-  reg [15:0] pincfg;  // only bits in 0xF3FF are stored
+  reg [15:0] pincfg;  // only bits in 0xF7FF are stored
   reg [13:0] shiftcfg;
   reg [4:0]  trap;
 
   reg [15:0] crc, x, y, isr, osr, to_cnt, time_cnt, divcnt;
   reg [4:0]  pc, delay, isr_cnt, osr_cnt;
-  reg        armed, stalled, timed_out, rx_ovf, tx_ovf;
+  reg        armed, edge_lvl, stalled, timed_out, rx_ovf, tx_ovf;
 
   // Decoded configuration
   wire [5:0] origin      = prog[5:0];
@@ -119,6 +128,7 @@ module pe_engine (
   wire [4:0] set_count   = (pincfg[6:4] > 3'd5) ? 5'd5 : {2'b00, pincfg[6:4]};
   wire [1:0] side_count  = pincfg[8:7];
   wire       side_pindir = pincfg[9];
+  wire       diff        = pincfg[10];
   wire [3:0] jmp_pin     = pincfg[15:12];
   wire       in_right    = shiftcfg[0];
   wire       out_right   = shiftcfg[1];
@@ -148,12 +158,16 @@ module pe_engine (
   reg         rx_push;
   reg  [15:0] rx_data;
 
+  assign tx_level = tx_count;
+  assign rx_level = rx_count;
+  assign rx_word  = rx_head;
+
   pe_fifo u_txf (
       .clk  (clk),
       .rst_n(rst_n),
       .flush(flush),
-      .push (host_push && tx_count != 3'd4),
-      .din  (wdata),
+      .push ((host_push && tx_count != 3'd4) || dma_push),
+      .din  (dma_push ? dma_wdata : wdata),
       .pop  (tx_pop),
       .head (tx_head),
       .count(tx_count)
@@ -165,7 +179,7 @@ module pe_engine (
       .flush(flush),
       .push (rx_push),
       .din  (rx_data),
-      .pop  (host_pop && rx_count != 3'd0),
+      .pop  ((host_pop && rx_count != 3'd0) || dma_pop),
       .head (rx_head),
       .count(rx_count)
   );
@@ -206,7 +220,7 @@ module pe_engine (
   // Next-state values computed by the executor
   reg [15:0] x_n, y_n, isr_n, osr_n, crc_n, to_cnt_n, time_n;
   reg [4:0]  pc_n, delay_n, isr_cnt_n, osr_cnt_n;
-  reg        armed_n, stalled_n, timed_out_n, rx_ovf_n;
+  reg        armed_n, edge_lvl_n, stalled_n, timed_out_n, rx_ovf_n;
 
   // Scratch
   reg        done, trapped, jump;
@@ -218,7 +232,7 @@ module pe_engine (
   reg [4:0]  base_cnt;
   reg [5:0]  cnt_sum;
   reg [15:0] i_out_mask, i_out_val, i_oe_mask, i_oe_val;
-  reg [15:0] smask, sval;
+  reg [15:0] smask, sval, mb, mm;
 
   always @(*) begin
     x_n = x;
@@ -231,6 +245,7 @@ module pe_engine (
     pc_n = pc;
     delay_n = delay;
     armed_n = armed;
+    edge_lvl_n = edge_lvl;
     to_cnt_n = to_cnt;
     time_n = time_cnt;
     stalled_n = stalled;
@@ -266,6 +281,8 @@ module pe_engine (
     cnt_sum = 6'd0;
     smask = 16'h0000;
     sval = 16'h0000;
+    mb = 16'h0000;
+    mm = 16'h0000;
 
     if (tick) begin
       time_n = time_cnt + 16'd1;
@@ -302,9 +319,18 @@ module pe_engine (
                 if (done && instr[7]) flag_clr[instr[2:0]] = 1'b1;
               end
               default: begin
-                p = pins_rot[instr[3:0]];
-                done = armed && (p == instr[7]);
-                if (!done && p != instr[7]) armed_n = 1'b1;
+                p = pins_rot[{1'b0, instr[2:0]}];
+                if (instr[3]) begin
+                  // any edge: a change from the level first seen
+                  done = armed && (p != edge_lvl);
+                  if (!armed) begin
+                    armed_n = 1'b1;
+                    edge_lvl_n = p;
+                  end
+                end else begin
+                  done = armed && (p == instr[7]);
+                  if (!done && p != instr[7]) armed_n = 1'b1;
+                end
               end
             endcase
             trapped = !done && instr[4] && (to_cnt == timeout);
@@ -500,6 +526,20 @@ module pe_engine (
           oe_val   = i_oe_val;
         end
 
+        // Differential pair: pin OUT_BASE+1 follows OUT_BASE, value inverted
+        if (diff) begin
+          mb = rotl16(16'h0001, out_base);
+          mm = rotl16(16'h0002, out_base);
+          if ((out_mask & mb) != 16'h0000) begin
+            out_mask = out_mask | mm;
+            out_val  = (out_val & ~mm) | (((out_val & mb) != 16'h0000) ? 16'h0000 : mm);
+          end
+          if ((oe_mask & mb) != 16'h0000) begin
+            oe_mask = oe_mask | mm;
+            oe_val  = (oe_val & ~mm) | (((oe_val & mb) != 16'h0000) ? mm : 16'h0000);
+          end
+        end
+
         if (done) begin
           if (jump) pc_n = jump_addr;
           else if (pc == wrap_top) pc_n = wrap_bottom;
@@ -548,6 +588,7 @@ module pe_engine (
       osr <= 16'h0000;
       osr_cnt <= 5'd16;
       armed <= 1'b0;
+      edge_lvl <= 1'b0;
       to_cnt <= 16'h0000;
       time_cnt <= 16'h0000;
       divcnt <= 16'h0000;
@@ -568,6 +609,7 @@ module pe_engine (
         osr <= 16'h0000;
         osr_cnt <= 5'd16;
         armed <= 1'b0;
+        edge_lvl <= 1'b0;
         to_cnt <= 16'h0000;
         time_cnt <= 16'h0000;
         stalled <= 1'b0;
@@ -583,6 +625,7 @@ module pe_engine (
         osr <= osr_n;
         osr_cnt <= osr_cnt_n;
         armed <= armed_n;
+        edge_lvl <= edge_lvl_n;
         to_cnt <= to_cnt_n;
         time_cnt <= time_n;
         stalled <= stalled_n;
@@ -600,7 +643,7 @@ module pe_engine (
           R_CLKDIV:  clkdiv <= wdata;
           R_PROG:    prog <= wdata;
           R_PINMAP:  pinmap <= wdata;
-          R_PINCFG:  pincfg <= wdata & 16'hF3FF;
+          R_PINCFG:  pincfg <= wdata & 16'hF7FF;
           R_SHIFT:   shiftcfg <= wdata[13:0];
           R_TIMEOUT: timeout <= wdata;
           R_TRAP:    trap <= wdata[4:0];
@@ -652,6 +695,12 @@ module pe_engine (
   always @(*) if (!f_past_valid) assume (!rst_n);
 
   wire f_host_status_w = sel && we && off == R_STATUS;
+
+  // The DMA contract, proven in pe_dma
+  always @(*) begin
+    assume (!(dma_push && (tx_count == 3'd4 || host_push)));
+    assume (!(dma_pop && (rx_count == 3'd0 || host_commit)));
+  end
 
   always @(*) begin
     if (f_past_valid) begin

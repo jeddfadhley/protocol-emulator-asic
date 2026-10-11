@@ -1,9 +1,12 @@
-# PEMU architecture and ISA reference (v1)
+# PEMU architecture and ISA reference (v2)
 
 PEMU is a programmable protocol emulator. Two small **engines** run programs
 from a shared 64-word instruction memory and drive or sample up to 16 pins
 with cycle-exact timing. A host (for example the RP2040 on the Tiny Tapeout
-demo board) loads programs and moves data over an SPI slave interface.
+demo board) loads programs and moves data over an SPI slave interface. A
+128-word **packet RAM** with two DMA channels feeds the engines at wire
+speed, so a burst (an Ethernet frame, for example) does not depend on how
+fast the host is.
 
 This document is the normative spec. The Python model (`sw/pemu/model.py`) is
 its executable form, and the RTL is checked against that model cycle by cycle.
@@ -25,6 +28,13 @@ harmless).
 The chip holds two 16-bit pin registers: `PIN_OUT` (value) and `PIN_OE`
 (direction, 1 = drive). Both reset to 0. Open-drain behaviour (I2C) is done by
 keeping `PIN_OUT` at 0 and toggling `PIN_OE`.
+
+**Differential pairs.** With `PINCFG.DIFF` set, every write an engine makes
+to pin `OUT_BASE` (value or direction, from any instruction or side-set) is
+also applied to pin `OUT_BASE + 1`: the value inverted, the direction the
+same. The mirrored write replaces any other write by that engine to
+`OUT_BASE + 1` in the same tick. This drives a differential line (10BASE-T,
+RS-485) from one data bit, and releases both wires together.
 
 Inputs pass through a 2-flop synchronizer, so engines see a pin change two
 clocks after it happens.
@@ -159,9 +169,14 @@ delay (0-31 with no side-set). Bit counts written `n` below are encoded in
 | 0   | `gpio`  | absolute pin `index` == pol |
 | 1   | `pin`   | pin `IN_BASE + index` == pol |
 | 2   | `flag`  | event flag `index[2:0]` == pol. When pol = 1, the flag is cleared as the wait completes. |
-| 3   | `edge`  | pin `IN_BASE + index` has been seen at `!pol` and is now `pol`, both during this WAIT |
+| 3   | `edge`  | `index[2:0]` selects pin `IN_BASE + index[2:0]`. With `index[3]` = 0: the pin has been seen at `!pol` and is now `pol`, both during this WAIT. With `index[3]` = 1 (**any edge**, assembler `wait any edge n`): the pin differs from the level it had on this WAIT's first evaluation; `pol` is ignored. |
 
 With `T` = 1 (assembler suffix `timeout`) the wait can trap, see 2.2.
+
+The first evaluation of an any-edge WAIT records the pin level and arms the
+wait, so it never completes on that evaluation. An edge that is already
+visible then counts as the starting level. Restart clears the armed bit and
+the recorded level.
 
 ### Sources (IN [7:5] and MOV [2:0])
 
@@ -206,7 +221,38 @@ wins over both.
 
 There are 8 shared flags. Engines change them with `SET FLAG` and `WAIT flag`
 (auto-clear). Engine 0 applies first, then engine 1, then a host write to
-`FLAGS` overrides both.
+`FLAGS`, `FLAG_SET` or `FLAG_CLR` applies on top.
+
+## 3a. Packet RAM and DMA
+
+The packet RAM holds 128 16-bit words. The host reaches it through
+`RAM_ADDR` and the `RAM_DATA` port: a write stores the word at `RAM_ADDR`
+and increments it; a read returns the word at `RAM_ADDR` and increments it
+when the word commits (an aborted read does not advance). Addresses wrap at
+128.
+
+Each engine has one DMA channel (`DMA0`, `DMA1`) that moves words between the
+RAM and that engine's FIFOs with no host involvement:
+
+- **TX** (`DIR` = 0): RAM to TX FIFO. A transfer happens when the TX FIFO
+  held fewer than 4 words at the start of the clock and the host is not
+  writing that engine's FIFO port in the same clock.
+- **RX** (`DIR` = 1): RX FIFO to RAM. A transfer happens when the RX FIFO
+  held at least one word at the start of the clock, the host is not
+  committing a read of that FIFO port, and the host is not writing
+  `RAM_DATA` in the same clock.
+
+A channel is active while `COUNT` is non-zero. Each transfer moves one word,
+increments `ADDR` (mod 128) and decrements `COUNT`. At most one transfer
+happens per clock: channel 0 goes first if it can transfer, otherwise channel
+1. A host write to a `DMAn` register in the same clock as a transfer wins
+over the channel's own update; FLUSH empties the FIFOs after any transfer
+in that clock. The engine's own FIFO operations in the same clock happen as
+usual, so a TX transfer and an engine pull, or an RX transfer and an engine
+push, can coincide.
+
+A TX DMA keeps up to 4 words queued, so an engine can stream one word per
+16 clocks or slower without ever stalling.
 
 ## 4. Host interface
 
@@ -217,8 +263,8 @@ CS_N low, command byte {R/W (1 = read), addr[6:0]}, then 16-bit words, CS_N high
 ```
 
 Each word is read from or written to `addr`. The address then increments,
-except for the FIFO ports (offset `0xF` in an engine block), so a burst can
-stream data. For reads, `MISO` carries the word starting on the SCK falling
+except for the streaming ports (the FIFO port at offset `0xF` of an engine
+block, and `RAM_DATA`), so a burst can stream data. For reads, `MISO` carries the word starting on the SCK falling
 edge after the command byte. No dummy bytes are needed.
 
 A read of a FIFO port pops the RX FIFO only when the 16th bit of the word
@@ -240,6 +286,13 @@ as 0 without losing a word that arrives during the read.
 | 0x65        | ID       | read only: `0x5045` ("PE") |
 | 0x66        | PIN_SET  | write only: `PIN_OUT \|= value` |
 | 0x67        | PIN_CLR  | write only: `PIN_OUT &= ~value` |
+| 0x68        | RAM_ADDR | [6:0] packet RAM address for the host port |
+| 0x69        | RAM_DATA | packet RAM port (streaming, see 3a) |
+| 0x6A        | DMA0     | engine 0 channel: [6:0] ADDR, [14:7] COUNT (words), [15] DIR (1 = RX) |
+| 0x6B        | DMA1     | engine 1 channel, same layout |
+| 0x6C        | FLAG_SET | write only: `FLAGS \|= value[7:0]` |
+| 0x6D        | FLAG_CLR | write only: `FLAGS &= ~value[7:0]` |
+| 0x6E        | VERSION  | read only: `0x0002` |
 
 Engine block offsets:
 
@@ -248,7 +301,7 @@ Engine block offsets:
 | 0x0 | CLKDIV   | 0      | tick every CLKDIV+1 clocks |
 | 0x1 | PROG     | 0xF800 | [5:0] ORIGIN, [10:6] WRAP_BOTTOM, [15:11] WRAP_TOP |
 | 0x2 | PINMAP   | 0      | [3:0] OUT_BASE, [7:4] SET_BASE, [11:8] SIDE_BASE, [15:12] IN_BASE |
-| 0x3 | PINCFG   | 0      | [3:0] OUT_COUNT (0 = 16), [6:4] SET_COUNT (0-5), [8:7] SIDE_COUNT (0-3), [9] SIDE_PINDIR, [15:12] JMP_PIN |
+| 0x3 | PINCFG   | 0      | [3:0] OUT_COUNT (0 = 16), [6:4] SET_COUNT (0-5), [8:7] SIDE_COUNT (0-3), [9] SIDE_PINDIR, [10] DIFF, [15:12] JMP_PIN |
 | 0x4 | SHIFT    | 0      | [0] IN_RIGHT, [1] OUT_RIGHT, [2] AUTOPUSH, [3] AUTOPULL, [7:4] PUSH_THRESH, [11:8] PULL_THRESH, [12] CRC_IN, [13] CRC_OUT |
 | 0x5 | TIMEOUT  | 0xFFFF | wait timeout, in ticks |
 | 0x6 | TRAP     | 0      | [4:0] trap address |
@@ -265,6 +318,7 @@ Engine block offsets:
 `SET_COUNT` values 6 and 7 act as 5.
 
 **Restart** resets PC, the delay counter, ISR, OSR (count 16, empty), the
-timeout counter, the edge-armed bit, TIME and the clock divider. It keeps X, Y,
+timeout counter, the edge-armed bit and recorded level, TIME and the clock
+divider. It does not affect the DMA channels. It keeps X, Y,
 CRC and the configuration. **Step** runs one tick of a disabled engine.
 **Flush** empties both FIFOs of an engine.

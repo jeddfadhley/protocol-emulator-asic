@@ -10,7 +10,7 @@
 //
 // Transaction: CS_N low, command byte {rw, addr[6:0]} (rw = 1 reads), then
 // any number of 16-bit words, MSB first. The address increments after each
-// word except at the FIFO ports (offset 0xF of an engine block).
+// word except at the streaming ports (FIFO ports and RAM_DATA).
 module pe_spi (
     input  wire        clk,
     input  wire        rst_n,
@@ -42,7 +42,8 @@ module pe_spi (
   reg [14:0] shift_in;
   reg [15:0] shift_out;
 
-  wire is_port = bus_addr[6:5] == 2'b10 && bus_addr[3:0] == 4'hF;
+  // Streaming ports keep their address: the FIFO ports and RAM_DATA
+  wire is_port = (bus_addr[6:5] == 2'b10 && bus_addr[3:0] == 4'hF) || bus_addr == 7'h69;
 
   // Load each read word on the falling SCK edge that starts it (bus_re), and
   // commit it on the rising edge of its last bit (bus_rc). A FIFO port only

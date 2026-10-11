@@ -221,14 +221,19 @@ def _operands(mnem, args, rest, defines, labels):
         if timeout:
             toks = toks[:-1]
         if len(toks) != 3:
-            raise AsmError("expected 'wait <pol> <gpio|pin|flag|edge> <index> [timeout]'")
-        pol = _num(toks[0], defines)
-        if pol not in (0, 1):
-            raise AsmError("wait polarity must be 0 or 1")
+            raise AsmError("expected 'wait <0|1|any> <gpio|pin|flag|edge> <index> [timeout]'")
         src = WAIT_SRCS[toks[1].lower()]
         idx = _num(toks[2], defines)
-        if not 0 <= idx < (8 if src == 2 else 16):
+        if not 0 <= idx < (8 if src in (2, 3) else 16):
             raise AsmError("wait index out of range")
+        if toks[0].lower() == "any":
+            if src != 3:
+                raise AsmError("'any' only applies to edge waits")
+            pol, idx = 0, idx | 8
+        else:
+            pol = _num(toks[0], defines)
+            if pol not in (0, 1):
+                raise AsmError("wait polarity must be 0 or 1")
         return OP_WAIT, (pol << 7) | (src << 5) | (int(timeout) << 4) | idx
 
     if mnem == "in":
@@ -305,9 +310,16 @@ def disassemble(word, side_count=0):
         cond = _JMP_NAMES[(word >> 5) & 7]
         text = f"jmp {cond + ', ' if cond else ''}{word & 31}"
     elif op == OP_WAIT:
-        text = f"wait {(word >> 7) & 1} {_WAIT_NAMES[(word >> 5) & 3]} {word & 15}"
-        if (word >> 5) & 3 == 2 and word & 8:
+        src = (word >> 5) & 3
+        text = f"wait {(word >> 7) & 1} {_WAIT_NAMES[src]} {word & 15}"
+        if src == 2 and word & 8:
             return raw  # flag index uses 3 bits
+        if src == 3 and word & 8:
+            if word & 128:
+                return raw  # any edge ignores the polarity bit
+            text = f"wait any edge {word & 7}"
+        elif src == 3:
+            text = f"wait {(word >> 7) & 1} edge {word & 7}"
         if word & 16:
             text += " timeout"
     elif op == OP_IN:

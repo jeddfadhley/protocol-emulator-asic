@@ -21,6 +21,7 @@ class EngineConfig:
     side_base: int = 0
     in_base: int = 0
     jmp_pin: int = 0
+    diff: bool = False
     in_right: bool = False
     out_right: bool = False
     autopush: bool = False
@@ -42,7 +43,7 @@ class EngineConfig:
     def pincfg(self, program):
         return (self.out_count & 15) | (self.set_count & 7) << 4 \
             | (program.side_count & 3) << 7 | int(program.side_pindir) << 9 \
-            | (self.jmp_pin & 15) << 12
+            | int(self.diff) << 10 | (self.jmp_pin & 15) << 12
 
     def shift(self):
         return (int(self.in_right) | int(self.out_right) << 1 | int(self.autopush) << 2

@@ -334,3 +334,131 @@ class PulseRecorder:
                 self.runs.append((self.level, self.count))
             self.level, self.count = v, 1
         return 0
+
+
+class EthMonitor:
+    """A 10BASE-T link partner's receiver, watching the TD+/TD- pair.
+
+    The line state is +1 when TD+ is high and TD- low, -1 for the reverse and
+    0 when both wires are equal (released: both pulled up). This checks the
+    transmitter strictly: normal link pulses must be exactly `nlp_clocks`
+    long, and in a frame every bit must be exactly 5 clocks with its
+    mid-bit transition after 2 clocks (Manchester, 10 Mbit/s at 50 MHz).
+    Frames end with TP_IDL: positive for at least 250 ns.
+    """
+
+    def __init__(self, tdp, tdn, nlp_clocks=5):
+        self.tdp, self.tdn = tdp, tdn
+        self.nlp_clocks = nlp_clocks
+        self.t = 0
+        self.runs = []          # (state, clocks) since the line left 0
+        self.cur, self.n = 0, 0
+        self.nlps = []          # start times of link pulses
+        self.frames = []        # bytes after the SFD (including FCS)
+        self.frame_times = []
+        self.errors = []
+        self.start = 0
+
+    def _state(self, wires):
+        p, n = bit(wires, self.tdp), bit(wires, self.tdn)
+        return 0 if p == n else (1 if p else -1)
+
+    def step(self, wires):
+        s = self._state(wires)
+        if s == self.cur:
+            self.n += 1
+        else:
+            if self.cur == 0 and s != 0:
+                self.runs, self.start = [], self.t
+            elif self.cur != 0:
+                self.runs.append((self.cur, self.n))
+                if s == 0:
+                    self._burst(self.runs)
+            self.cur, self.n = s, 1
+        self.t += 1
+        return 0
+
+    def _burst(self, runs):
+        if runs == [(1, self.nlp_clocks)]:
+            self.nlps.append(self.start)
+            return
+        # One state per clock, read as 5-clock bit cells: 2 clocks of the
+        # inverted bit, then 3 of the bit
+        line = [s for s, n in runs for _ in range(n)]
+        bits, k = [], 0
+        while k + 5 <= len(line):
+            first, second = set(line[k:k + 2]), set(line[k + 2:k + 5])
+            if len(first) != 1 or len(second) != 1 or first == second:
+                break
+            bits.append(1 if second == {1} else 0)
+            k += 5
+        idle = line[k:]
+        # TP_IDL: positive for 250-375 ns after the last bit
+        if set(idle) != {1} or not 13 <= len(idle) <= 18:
+            self.errors.append(f"t={self.start}: bad end after {len(bits)} bits: "
+                               f"{len(idle)} clocks {sorted(set(idle))}")
+            return
+        if len(bits) < 8 * 72 or len(bits) % 8:
+            self.errors.append(f"t={self.start}: {len(bits)} bits is not a whole frame")
+            return
+        data = bytes(sum(b << i for i, b in enumerate(bits[j:j + 8]))
+                     for j in range(0, len(bits), 8))
+        if data[:8] != bytes([0x55] * 7 + [0xD5]):
+            self.errors.append(f"t={self.start}: bad preamble {data[:8].hex()}")
+            return
+        self.frames.append(data[8:])
+        self.frame_times.append(self.start)
+
+
+class EthSource:
+    """A 10BASE-T link partner's transmitter, after the receive comparator.
+
+    Drives one ui_in bit. Frames (bytes without preamble) are sent at
+    10 Mbit/s from an independent clock: `ppm` sets its frequency error and
+    `phase_ns` its offset from the chip's 50 MHz clock, and `jitter_ns`
+    moves every edge randomly. The idle line is 0; each frame ends with
+    TP_IDL (high for 300 ns).
+    """
+
+    def __init__(self, frames=(), gap_ns=20_000, phase_ns=0.0, ppm=0.0, jitter_ns=0.0,
+                 seed=1, start_ns=2_000, link_pulses=False):
+        import random
+        from .eth import PREAMBLE, bits_lsb_first, manchester
+        self.rng = random.Random(seed)
+        self.jitter = jitter_ns
+        self.edges = []  # (time_ns, level) sorted
+        t = start_ns + phase_ns
+        half = 50.0 * (1 + ppm * 1e-6)
+        for f in frames:
+            if link_pulses:  # a normal link pulse in the gap before the frame
+                self.edges += [(t - gap_ns / 2, 1), (t - gap_ns / 2 + 100, 0)]
+            halves = manchester(bits_lsb_first(PREAMBLE + bytes(f)))
+            level = 0
+            for h in halves:
+                if h != level:
+                    self.edges.append((t, h))
+                    level = h
+                t += half
+            if level != 1:
+                self.edges.append((t, 1))
+            t += 6 * half  # TP_IDL: 300 ns
+            self.edges.append((t, 0))
+            t += gap_ns
+        self.edges.sort()
+        self.edges = [(tt + (self.rng.uniform(-1, 1) * self.jitter if self.jitter else 0), v)
+                      for tt, v in self.edges]
+        self.k = 0
+        self.level = 0
+        self.t = 0.0
+        self.end_ns = t
+
+    def step(self, wires):
+        self.t += 20.0
+        while self.k < len(self.edges) and self.edges[self.k][0] <= self.t:
+            self.level = self.edges[self.k][1]
+            self.k += 1
+        return self.level
+
+    @property
+    def done(self):
+        return self.k >= len(self.edges)

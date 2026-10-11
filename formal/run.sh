@@ -22,4 +22,5 @@ check() {
 
 check pe_fifo   -DFORMAL_FIFO_TOP $SRC/pe_fifo.v
 check pe_engine ""                $SRC/pe_fifo.v $SRC/pe_engine.v
+check pe_dma    ""                $SRC/pe_dma.v
 echo "All formal checks passed."

@@ -61,6 +61,25 @@ MUTATIONS = [
      "      if (bus_we) bus_addr <= bus_addr + 7'd1;", "SPI bursts walk off the FIFO port"),
     ("pe_spi.v", "  assign bus_rc = !cs_n && data_phase && rw && sck_rise && bitcnt == 4'd15;",
      "  assign bus_rc = !cs_n && data_phase && rw && sck_fall && bitcnt == 4'd0;", "SPI pops on the trailing edge"),
+    # v2: any-edge waits, differential pairs, packet RAM and DMA
+    ("pe_engine.v", "done = armed && (p != edge_lvl);", "done = armed && (p != instr[7]);",
+     "any-edge wait compares with the polarity bit"),
+    ("pe_engine.v", "edge_lvl_n = p;", "edge_lvl_n = ~p;", "any-edge wait records the wrong level"),
+    ("pe_engine.v", "(((out_val & mb) != 16'h0000) ? 16'h0000 : mm);", "(((out_val & mb) != 16'h0000) ? mm : 16'h0000);",
+     "differential pin not inverted"),
+    ("pe_engine.v", "            oe_mask = oe_mask | mm;\n", "", "differential pin direction not mirrored"),
+    ("pe_dma.v", "  wire go1 = ok1 && !ok0;", "  wire go1 = ok1;", "both DMA channels move in one clock"),
+    ("pe_dma.v", "(tx_level0 != 3'd4 && !host_push0)", "(tx_level0 != 3'd3 && !host_push0)", "TX DMA stops one word early"),
+    ("pe_dma.v", "(rx_level0 != 3'd0 && !host_commit0 && !host_ram_we)", "(rx_level0 != 3'd0 && !host_commit0)",
+     "RX DMA ignores host RAM writes"),
+    ("pe_dma.v", "advance = {d[15], d[14:7] - 8'd1, d[6:0] + 7'd1};", "advance = {d[15], d[14:7] - 8'd1, d[6:0]};",
+     "DMA address does not advance"),
+    ("pe_core.v", "      if (bus_rc && bus_addr == A_RAM_DATA) ram_addr <= ram_addr + 7'd1;\n", "",
+     "RAM read does not advance"),
+    ("pe_core.v", "A_FLAG_SET: flags <= fl_e1 | bus_wdata[7:0];", "A_FLAG_SET: flags <= bus_wdata[7:0];",
+     "FLAG_SET overwrites the flags"),
+    ("pe_core.v", "pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;", "pram[dma_addr] <= rxw0;", "RX DMA stores the wrong engine's word"),
+    ("pe_spi.v", " || bus_addr == 7'h69;", ";", "SPI bursts walk off RAM_DATA"),
 ]
 
 
@@ -95,7 +114,8 @@ def main(selected):
             env = dict(os.environ, COSIM_SEEDS="12", COSIM_CYCLES="1500")
             test_dir = os.path.join(work, "test")
             if fname == "pe_spi.v":
-                run(["make", "-s", "COCOTB_TEST_FILTER=test_spi_registers|test_fifo_port_burst|test_uart_rx"],
+                run(["make", "-s", "COCOTB_TEST_FILTER=test_spi_registers|test_fifo_port_burst|test_uart_rx"
+                     "|test_eth_loopback"],
                     test_dir, env)
             else:
                 run(["make", "-s", "TB=core"], test_dir, env)

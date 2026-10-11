@@ -10,9 +10,9 @@ from .asm import assemble_file
 from .host import EngineConfig, ctrl
 from .model import (A_CTRL, A_FLAGS, A_ID, A_PIN_CLR, A_PIN_OE, A_PIN_SET,
                     CHIP_ID, R_STATUS, R_X, engine_base)
-from . import usb
-from .periph import (I2cTarget, PulseRecorder, SpiSlave, SquareWave, UartSink, UartSource,
-                     UsbLsMonitor)
+from . import eth, usb
+from .periph import (EthMonitor, EthSource, I2cTarget, PulseRecorder, SpiSlave, SquareWave,
+                     UartSink, UartSource, UsbLsMonitor)
 
 PROGRAMS = os.path.join(os.path.dirname(__file__), "..", "programs")
 
@@ -40,6 +40,8 @@ SDA, SCL = 4, 5
 LED_PIN = 13       # uo_out[5]
 USB_DP, USB_DM = 6, 7
 EDGE_PIN = 8       # ui_in[0]
+ETH_TD = 0         # uio[0] = TD+, uio[1] = TD- (PINCFG.DIFF)
+ETH_RD = 8         # ui_in[0]: receive pair, after a comparator
 
 UART_DIV = 3                    # 4 clocks per tick
 UART_CPB = 8 * (UART_DIV + 1)   # 32 clocks per bit
@@ -291,5 +293,117 @@ async def usb_ls_tx(b):
     assert not (await b.status(0)) & (1 << 14), "TX FIFO overflowed"
 
 
+# ----- 10BASE-T Ethernet (50 MHz clock) -----
+
+ETH_TX_ORIGIN, ETH_RX_ORIGIN = 0, 16
+
+
+def eth_tx_cfg(timeout=0xFFFF, nlp_div=11):
+    """eth_tx config. Link pulses are (nlp_div + 1) * (timeout + 2) + 8 ticks
+    apart: 12 x 65537 + 8 ticks = 15.7 ms at 50 MHz with the defaults."""
+    return EngineConfig(out_base=ETH_TD, set_base=ETH_TD, side_base=ETH_TD, out_count=1,
+                        set_count=1, diff=True, out_right=True, autopull=True,
+                        timeout=timeout, crc_init=nlp_div, y=nlp_div)
+
+
+def eth_rx_cfg(rd_pin, max_bytes):
+    _, x = eth.rx_words(max_bytes)
+    return EngineConfig(in_base=rd_pin, jmp_pin=rd_pin, in_right=True, autopush=True,
+                        timeout=4, x=x, y=x)
+
+
+async def eth_send(b, frame, origin=0):
+    """Queue a frame (without FCS) for eth_tx: RAM image, DMA, flag 0."""
+    img = eth.tx_image(eth.with_fcs(frame))
+    await b.ram_write(origin, img)
+    await b.dma(0, origin, len(img))
+    await b.flag_set(1)
+    return img
+
+
+async def eth_wait_frame(b, limit=200_000):
+    """Wait for eth_rx to finish a frame (flag 1), clear the flag and return
+    the RX DMA address after it."""
+    for _ in range(limit):
+        if (await b.flags()) & 2:
+            break
+    else:
+        raise TimeoutError("no frame received")
+    await b.flag_clr(2)
+    return (await b.dma_state(1))[0]
+
+
+def eth_hello(n=0):
+    return eth.udp_frame(b"Hello from PEMU over 10BASE-T! #%d" % n)
+
+
+async def eth_loopback(b):
+    """Engine 0 sends a frame, engine 1 receives it, on-chip."""
+    frame = eth.with_fcs(eth_hello())
+    _, x = eth.rx_words(len(frame))
+    await b.setup(0, program("eth_tx"), ETH_TX_ORIGIN, eth_tx_cfg(timeout=300, nlp_div=1))
+    await b.setup(1, program("eth_rx"), ETH_RX_ORIGIN, eth_rx_cfg(ETH_TD, len(frame)))
+    await b.dma(1, 64, 64, rx=True)
+    await b.start(3, loopback=True)
+    await eth_send(b, eth_hello())
+    end = await eth_wait_frame(b)
+    data, nbits = eth.rx_decode(await b.ram_read(64, end - 64), x)
+    assert nbits == 8 * len(frame), nbits
+    assert data == frame, (data.hex(), frame.hex())
+    assert eth.fcs_ok(data)
+
+
+async def eth_tx(b):
+    """A link partner checks link pulses and every bit's timing."""
+    mon = b.monitor(EthMonitor(ETH_TD, ETH_TD + 1))
+    await b.setup(0, program("eth_tx"), ETH_TX_ORIGIN, eth_tx_cfg(timeout=400, nlp_div=2))
+    await b.start(1)
+    await b.run_until(lambda: len(mon.nlps) >= 2, 20_000)
+    frames = [eth_hello(1), eth.udp_frame(bytes(range(100)))]
+    for f in frames:
+        await eth_send(b, f)
+        n = len(mon.frames)
+        await b.run_until(lambda: len(mon.frames) > n or mon.errors, 60_000)
+    await b.run_until(lambda: len(mon.nlps) >= 4, 20_000)
+    assert not mon.errors, mon.errors
+    assert mon.frames == [eth.with_fcs(f) for f in frames]
+    quiet = [(t0, t1) for t0, t1 in zip(mon.nlps, mon.nlps[1:])
+             if not any(t0 < f < t1 for f in mon.frame_times)]
+    assert len(quiet) >= 2 and {t1 - t0 for t0, t1 in quiet} == {3 * 402 + 8}, mon.nlps
+
+
+async def _eth_rx(b, **line):
+    frames = [eth.with_fcs(eth_hello(2)), eth.with_fcs(eth.udp_frame(b"short")),
+              eth.with_fcs(eth.udp_frame(bytes(range(256))[:90]))]
+    max_bytes = 100
+    _, x = eth.rx_words(max_bytes)
+    src = EthSource(frames, gap_ns=120_000, **line)
+    await b.setup(1, program("eth_rx"), ETH_RX_ORIGIN, eth_rx_cfg(ETH_RD, max_bytes))
+    await b.dma(1, 0, 128, rx=True)
+    await b.start(2)
+    b.ui(src, ETH_RD - 8)
+    ends = [await eth_wait_frame(b) for _ in frames]
+    words = await b.ram_read(0, ends[-1])
+    start = 0
+    for f, end in zip(frames, ends):
+        data, nbits = eth.rx_decode(words[start:end], x)
+        if len(f) <= max_bytes:
+            assert data == f, (data.hex(), f.hex())
+            assert eth.fcs_ok(data)
+        else:  # longer than the buffer: the first max_bytes, the rest skipped
+            assert data == f[:max_bytes] and nbits == 8 * max_bytes
+        start = end
+
+
+async def eth_rx(b):
+    await _eth_rx(b, link_pulses=True)
+
+
+async def eth_rx_drift(b):
+    """Receive with the sender's clock 100 ppm fast, phase offset and jitter."""
+    await _eth_rx(b, phase_ns=13.0, ppm=100.0, jitter_ns=3.0)
+
+
 SCENARIOS = [check_id, uart_tx, uart_tx_timing, uart_rx, uart_loopback, spi, sd_cmd,
-             i2c, i2c_timeout, ws2812, edge_stamp, single_step, usb_ls_tx]
+             i2c, i2c_timeout, ws2812, edge_stamp, single_step, usb_ls_tx,
+             eth_loopback, eth_tx, eth_rx, eth_rx_drift]

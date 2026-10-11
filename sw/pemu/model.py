@@ -16,21 +16,35 @@ from dataclasses import dataclass, field
 
 M16 = 0xFFFF
 FIFO_DEPTH = 4
+RAM_WORDS = 128
 
 # Global register addresses
-A_CTRL, A_FLAGS, A_PIN_IN, A_PIN_OUT, A_PIN_OE, A_ID, A_PIN_SET, A_PIN_CLR = range(0x60, 0x68)
+(A_CTRL, A_FLAGS, A_PIN_IN, A_PIN_OUT, A_PIN_OE, A_ID, A_PIN_SET, A_PIN_CLR,
+ A_RAM_ADDR, A_RAM_DATA, A_DMA0, A_DMA1, A_FLAG_SET, A_FLAG_CLR, A_VERSION) = range(0x60, 0x6F)
 CHIP_ID = 0x5045
+VERSION = 0x0002
 
 # Engine register offsets
 (R_CLKDIV, R_PROG, R_PINMAP, R_PINCFG, R_SHIFT, R_TIMEOUT, R_TRAP, R_CRCPOLY,
  R_CRC, R_X, R_Y, R_ISR, R_OSR, R_STATUS, R_TIME, R_FIFO) = range(16)
 
-PINCFG_MASK = 0xF3FF
+PINCFG_MASK = 0xF7FF
 SHIFT_MASK = 0x3FFF
 
 
 def engine_base(e):
     return 0x40 + 16 * e
+
+
+def is_port(addr):
+    """Streaming ports: an SPI burst does not advance the address past them."""
+    addr &= 0x7F
+    return (addr & 0x60) == 0x40 and (addr & 15) == R_FIFO or addr == A_RAM_DATA
+
+
+def dma_word(addr, count, rx):
+    """DMAn register value: [6:0] ADDR, [14:7] COUNT (words), [15] DIR (1 = RX)."""
+    return (addr & 127) | (count & 255) << 7 | int(bool(rx)) << 15
 
 
 def rotl(v, s):
@@ -75,6 +89,16 @@ class Effects:
     tx_pop: bool = False
     rx_push: int | None = None
 
+    def mirror(self, base):
+        """Differential pair: pin base+1 follows pin base, value inverted."""
+        b, m = 1 << (base & 15), 1 << ((base + 1) & 15)
+        if self.out_mask & b:
+            self.out_mask |= m
+            self.out_val = (self.out_val & ~m) | (0 if self.out_val & b else m)
+        if self.oe_mask & b:
+            self.oe_mask |= m
+            self.oe_val = (self.oe_val & ~m) | (m if self.oe_val & b else 0)
+
     def write_pins(self, dirs, base, n, value):
         m = rotl(mask_n(n), base)
         v = rotl(value & mask_n(n), base)
@@ -108,6 +132,7 @@ class Engine:
     osr: int = 0
     osr_cnt: int = 16
     armed: int = 0
+    edge_lvl: int = 0
     to_cnt: int = 0
     time: int = 0
     divcnt: int = 0
@@ -144,6 +169,8 @@ class Engine:
     @property
     def side_pindir(self): return (self.pincfg >> 9) & 1
     @property
+    def diff(self): return (self.pincfg >> 10) & 1
+    @property
     def jmp_pin(self): return (self.pincfg >> 12) & 15
     @property
     def in_right(self): return self.shift & 1
@@ -169,7 +196,7 @@ class Engine:
     def restart(self):
         self.pc = self.delay = self.isr = self.isr_cnt = self.osr = 0
         self.osr_cnt = 16
-        self.armed = self.to_cnt = self.time = self.divcnt = self.stalled = 0
+        self.armed = self.edge_lvl = self.to_cnt = self.time = self.divcnt = self.stalled = 0
 
     def source(self, src, pin_in):
         return [rotr(pin_in, self.in_base), self.x, self.y, 0,
@@ -219,8 +246,13 @@ class Engine:
                 done = ((flags >> (idx & 7)) & 1) == pol
                 if done and pol:
                     fx.flag_clr |= 1 << (idx & 7)
+            elif idx & 8:  # any edge: a change from the level first seen
+                p = rel(idx & 7)
+                done = bool(self.armed) and p != self.edge_lvl
+                if not self.armed:
+                    self.armed, self.edge_lvl = 1, p
             else:
-                p = rel(idx)
+                p = rel(idx & 7)
                 done = bool(self.armed) and p == pol
                 if not done and p != pol:
                     self.armed = 1
@@ -351,6 +383,8 @@ class Engine:
         fx.oe_mask, fx.oe_val = pins.oe_mask, pins.oe_val
         if sc:
             fx.write_pins(self.side_pindir, self.side_base, sc, sd >> (5 - sc))
+        if self.diff:
+            fx.mirror(self.out_base)
 
         if done:
             if jump is not None:
@@ -383,6 +417,9 @@ class Core:
 
     def reset(self):
         self.imem = [0] * 64
+        self.ram = [0] * RAM_WORDS
+        self.ram_addr = 0
+        self.dma = [0, 0]
         self.engines = [Engine(), Engine()]
         self.ctrl = 0
         self.flags = 0
@@ -424,6 +461,8 @@ class Core:
         return {
             A_CTRL: self.ctrl & 7, A_FLAGS: self.flags, A_PIN_IN: self.pin_in(),
             A_PIN_OUT: self.pin_out, A_PIN_OE: self.pin_oe, A_ID: CHIP_ID,
+            A_RAM_ADDR: self.ram_addr, A_RAM_DATA: self.ram[self.ram_addr],
+            A_DMA0: self.dma[0], A_DMA1: self.dma[1], A_VERSION: VERSION,
         }.get(addr, 0)
 
     # ----- one clock -----
@@ -463,6 +502,35 @@ class Core:
             pin_oe = (pin_oe & ~fx.oe_mask) | (fx.oe_val & fx.oe_mask)
             flags = (flags & ~fx.flag_clr) | fx.flag_set
 
+        # DMA: at most one transfer per clock, channel 0 first. A channel
+        # stands aside when the host uses the same FIFO (or, for RX, writes
+        # the RAM) in this clock.
+        ram_we = we and addr == A_RAM_DATA
+        dma_push, dma_pop = [None, None], [False, False]
+        dma_next = list(self.dma)
+        ram = self.ram
+        for c in range(2):
+            d = self.dma[c]
+            daddr, dcount, drx = d & 127, (d >> 7) & 255, d >> 15
+            fifo = engine_base(c) + R_FIFO
+            e = self.engines[c]
+            if dcount == 0:
+                continue
+            if drx:
+                ok = e.rxf and not (rc and addr == fifo) and not ram_we
+            else:
+                ok = len(e.txf) < FIFO_DEPTH and not (we and addr == fifo)
+            if not ok:
+                continue
+            if drx:
+                ram = list(ram)
+                ram[daddr] = e.rxf[0]
+                dma_pop[c] = True
+            else:
+                dma_push[c] = self.ram[daddr]
+            dma_next[c] = dma_word(daddr + 1, dcount - 1, drx)
+            break
+
         # FIFOs
         for i, (e, fx) in enumerate(zip(self.engines, fxs)):
             base = engine_base(i)
@@ -481,12 +549,18 @@ class Core:
                     ntx.append(wdata)
                 else:
                     e.tx_ovf = 1
-            nrx = rxf[1:] if (rx_pop and rxf) else list(rxf)
+            if dma_push[i] is not None:
+                ntx.append(dma_push[i])
+            nrx = rxf[1:] if ((rx_pop or dma_pop[i]) and rxf) else list(rxf)
             if fx.rx_push is not None:
                 nrx.append(fx.rx_push)
             if flush[i]:
                 ntx, nrx = [], []
             e.txf, e.rxf = ntx, nrx
+
+        self.ram, self.dma = ram, dma_next
+        if rc and addr == A_RAM_DATA:
+            self.ram_addr = (self.ram_addr + 1) % RAM_WORDS
 
         # Host writes override everything else this cycle.
         if we:
@@ -522,6 +596,18 @@ class Core:
                 pin_out |= wdata
             elif addr == A_PIN_CLR:
                 pin_out &= ~wdata & M16
+            elif addr == A_RAM_ADDR:
+                self.ram_addr = wdata % RAM_WORDS
+            elif addr == A_RAM_DATA:
+                self.ram = list(self.ram)
+                self.ram[self.ram_addr] = wdata
+                self.ram_addr = (self.ram_addr + 1) % RAM_WORDS
+            elif addr in (A_DMA0, A_DMA1):
+                self.dma[addr - A_DMA0] = wdata
+            elif addr == A_FLAG_SET:
+                flags |= wdata & 0xFF
+            elif addr == A_FLAG_CLR:
+                flags &= ~wdata & 0xFF
 
         self.pin_out, self.pin_oe, self.flags = pin_out, pin_oe, flags
         self.sync2 = self.sync1
