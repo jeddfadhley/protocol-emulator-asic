@@ -1,0 +1,73 @@
+name: basys3
+on: [push, workflow_dispatch]
+jobs:
+  # The FPGA wrapper (UART bridge + PEMU) in simulation, plus the host tool.
+  fpga-sim:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Install iverilog
+        run: sudo apt-get update && sudo apt-get install -y iverilog
+
+      - name: Setup python
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+
+      - name: Install Python packages
+        run: pip install -r test/requirements.txt
+
+      - name: Host tool tests (pemu.fpga against the model)
+        run: cd sw && python -m pytest -q tests/test_fpga_host.py
+
+      - name: UART -> bridge -> PEMU simulation
+        run: |
+          cd fpga/test
+          make
+          test -f results.xml && ! grep failure results.xml
+
+      - name: Upload results
+        if: success() || failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fpga-sim-results
+          path: |
+            fpga/test/results.xml
+            fpga/test/tb_fpga.fst
+
+  # Open-source bitstream build (openXC7: Yosys + nextpnr-xilinx + Project X-Ray)
+  bitstream:
+    runs-on: ubuntu-24.04
+    container: regymm/openxc7:latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v6
+
+      - name: Cache the chip database
+        uses: actions/cache@v4
+        with:
+          path: fpga/basys3/chipdb
+          key: openxc7-chipdb-xc7a35t-v1
+
+      - name: Build the Basys 3 bitstream
+        shell: bash
+        run: |
+          cd fpga/basys3
+          make
+          ls -l pemu_basys3.bit
+
+      - name: Timing and utilisation summary
+        if: success() || failure()
+        shell: bash
+        run: |
+          cd fpga/basys3
+          sed -n '/Device utilisation/,/^Info: *$/p' nextpnr.log | head -30 || true
+          grep -E "Max frequency" nextpnr.log | tail -1 || true
+
+      - name: Upload bitstream
+        uses: actions/upload-artifact@v7
+        with:
+          name: pemu_basys3
+          path: fpga/basys3/pemu_basys3.bit
