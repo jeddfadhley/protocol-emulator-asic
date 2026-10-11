@@ -144,8 +144,9 @@ Ethernet commands:
 
 The reply path is: Ethernet → PEMU's `eth_rx` program → packet RAM → USB
 serial → the Python code on the laptop, which builds the reply → back
-through the packet RAM → `eth_tx` → Ethernet. Expect a few milliseconds per
-ping, mostly the USB serial link.
+through the packet RAM → `eth_tx` → Ethernet. Expect ping times of roughly
+50-80 ms. Almost all of that is the USB serial chip, which holds small
+replies for up to 16 ms; on the wire a frame takes about 0.1 ms.
 
 If a command says the board was not found, check the cable and the power
 switch, run `python3 -m pemu.fpga ports`, and pass the port explicitly, e.g.
@@ -314,8 +315,14 @@ docker run --rm -v "$PWD":/work -w /work/fpga/basys3 regymm/openxc7 make
   responder against a simulated laptop (`sw/tests/test_board_driver.py`).
 - The `pemu.fpga` tool, against the Python model of the chip (`sw/tests`).
 - The open-source tools build a bitstream in CI, and their timing estimate
-  says the design runs at about 56 MHz, above the 50 MHz it needs (the
+  says the design runs at about 66 MHz, above the 50 MHz it needs (the
   Vivado script also stops if timing is not met).
-- **Not yet tested on a real board**: everything that depends on hardware
-  (the serial port, the PLL, the pins, Ethernet levels). Please report what
-  you find.
+- **On a real Basys 3** (macOS, openFPGALoader, 2026-10-11): the bitstream
+  loads, `check` reads the chip ID, the UART and Ethernet self-tests pass,
+  all 128 packet-RAM words and 64 instruction words read back correctly, and
+  100 out of 100 Ethernet frames of random sizes and contents made it through
+  the on-chip 10BASE-T loopback (about 80 ms per round trip, mostly USB
+  latency).
+- **Not yet tried:** Ethernet to a real laptop through an RJ45 jack (the
+  signal levels and a real PHY's response to the 40/60 ns half bits), UART
+  output to a USB-serial adapter, I2C and WS2812 devices.

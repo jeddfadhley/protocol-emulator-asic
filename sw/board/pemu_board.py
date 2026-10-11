@@ -157,7 +157,7 @@ class Pemu:
         self.write(A_RAM_ADDR, addr)
         out = []
         while len(out) < n:
-            k = min(32, n - len(out))
+            k = min(64, n - len(out))
             w = self.read(A_RAM_DATA, k)
             out += [w] if k == 1 else w
         return out

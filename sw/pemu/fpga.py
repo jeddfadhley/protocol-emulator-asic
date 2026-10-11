@@ -103,7 +103,14 @@ class SerialLink:
             ser = serial.Serial(port, baud, timeout=timeout)
         self.ser = ser
         self.port = port
+        self._pending = 0    # reply bytes of posted writes not yet read
         self._sync()
+
+    def _drain(self):
+        """Collect the replies of posted writes (their content is unused)."""
+        if self._pending:
+            n, self._pending = self._pending, 0
+            self._read(n)
 
     def _read(self, n):
         data = bytearray()
@@ -130,6 +137,7 @@ class SerialLink:
 
     def identify(self):
         """Check that the PEMU FPGA image is answering; returns b'PEMU'."""
+        self._drain()
         self.ser.write(b"I")
         reply = self._read(4)
         if reply != b"PEMU":
@@ -138,6 +146,7 @@ class SerialLink:
 
     def reset(self):
         """Pulse PEMU's reset (all registers back to their reset values)."""
+        self._drain()
         self.ser.write(b"R")
         if self._read(1) != b"R":
             raise LinkError("bad reply to reset")
@@ -147,6 +156,16 @@ class SerialLink:
         if not 1 <= len(data) <= MAX_CHUNK:
             raise ValueError("an SPI transaction must be 1..65535 bytes")
         self.ser.write(b"S" + len(data).to_bytes(2, "big") + data)
+        if not data[0] & 0x80:
+            # A register write: its reply carries nothing, so don't wait for
+            # it (each USB round trip costs milliseconds). The bridge keeps
+            # the order, and the reply bytes are collected before the next
+            # read.
+            self._pending += len(data)
+            if self._pending > 4096:
+                self._drain()
+            return bytearray(len(data))
+        self._drain()
         return bytearray(self._read(len(data)))
 
     def close(self):
