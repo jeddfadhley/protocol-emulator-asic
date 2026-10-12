@@ -15,7 +15,7 @@ and every layer runs in CI on each push (`.github/workflows/test.yaml`).
  (model)                       │      RTL driven through its real SPI pins
                                │
                      formal proofs (BMC + k-induction)
-                     mutation testing (43 planted bugs)
+                     mutation testing (45 planted bugs)
                      gate-level re-run of the chip tests (CI)
 ```
 
@@ -144,13 +144,13 @@ assumed. It is assumed only when the FIFO is checked on its own.
 ## 5. Mutation testing (`test/mutate.py`)
 
 Mutation testing asks whether the tests would notice a bug. The script
-plants 43 realistic bugs, one at a time, and reruns the relevant tests. The
+plants 45 realistic bugs, one at a time, and reruns the relevant tests. The
 bugs include an off-by-one in a threshold, a missing decrement, a wrong CRC
 tap, a missing synchronizer stage, broken engine priority, and an SPI pop on
 the wrong clock edge, plus 12 for v2: DMA priority and address bugs, RAM
 port bugs, a differential pin that is not inverted, an any-edge wait
 compared with the wrong level, and 6 for the timing work (late pins that are
-not late, a mis-wired STEP pulse, a ring buffer that runs out...). **All 43
+not late, a mis-wired STEP pulse, a ring buffer that runs out...). **All 45
 are caught.**
 
 The first run caught 24. The survivor, a PUSH `iffull` off by one, led to the
@@ -194,9 +194,16 @@ the timing repair was only run at the typical corner. The fixes:
   reaches the engines combinationally (spec updated).
 - The clock divider compare is computed a clock early, with a formal proof
   that it always equals the original.
-- Optimising all three corners at once in the resizer (`RSZ_CORNERS`) was
-  tried and dropped: the layout no longer finished inside CI's 6-hour limit.
-  The two design fixes above remove the paths at their source instead.
+- The fetch address (ORIGIN + PC) is registered, computed a clock early
+  from the next PC, so the 6-bit add no longer sits in front of the
+  instruction fetch. A formal assertion proves the register always equals
+  ORIGIN + PC. This came from the v2 layout, where the worst typical-corner
+  paths ran PC → add → fetch → execute → pin registers (-1.37 ns); the PC
+  itself had 3.4 ns to spare.
+- Two layout settings: OpenROAD now runs on 4 threads (`OPENROAD_THREADS`;
+  left unset, LibreLane 3.1.0.dev3 fell back to one thread and routing ran
+  past CI's 6-hour limit), and the all-corner resizer (`RSZ_CORNERS`) was
+  dropped for the same reason.
 
 ## Bugs found by this process
 

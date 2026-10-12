@@ -198,8 +198,6 @@ module pe_engine (
   // ---------------------------------------------------------------------
   // Execute
 
-  assign fetch_addr = origin + {1'b0, pc};
-
   wire [2:0] op    = instr[15:13];
   wire [4:0] sd    = instr[12:8];
   wire [4:0] dmask = 5'b11111 >> side_count;
@@ -227,6 +225,13 @@ module pe_engine (
   reg [15:0] x_n, y_n, isr_n, osr_n, crc_n, to_cnt_n, time_n;
   reg [4:0]  pc_n, delay_n, isr_cnt_n, osr_cnt_n;
   reg        armed_n, edge_lvl_n, stalled_n, timed_out_n, rx_ovf_n;
+
+  // The fetch address (ORIGIN + PC) is registered, computed a clock early
+  // from the next PC and ORIGIN, so the add is not in front of the fetch.
+  reg  [5:0] fetch_q;
+  wire [5:0] origin_d = (sel && we && off == R_PROG) ? wdata[5:0] : origin;
+  wire [4:0] pc_d     = restart ? 5'd0 : pc_n;
+  assign fetch_addr = fetch_q;
 
   // Scratch
   reg        done, trapped, jump;
@@ -605,6 +610,7 @@ module pe_engine (
       time_cnt <= 16'h0000;
       divcnt <= 16'h0000;
       div_hit <= 1'b1;
+      fetch_q <= 6'd0;
       stalled <= 1'b0;
       timed_out <= 1'b0;
       rx_ovf <= 1'b0;
@@ -646,6 +652,7 @@ module pe_engine (
       end
       divcnt  <= divcnt_d;
       div_hit <= divcnt_d >= clkdiv_d;
+      fetch_q <= origin_d + {1'b0, pc_d};
 
       if (host_push && tx_count == 3'd4) tx_ovf <= 1'b1;
 
@@ -728,6 +735,8 @@ module pe_engine (
 
     // The precomputed divider compare is always right
     if (f_past_valid && rst_n) assert (div_hit == (divcnt >= clkdiv));
+    // ...and so is the registered fetch address
+    if (f_past_valid && rst_n) assert (fetch_q == origin + {1'b0, pc});
 
     // Late writes only ever mark pins that are being written
     assert ((late_val & ~out_mask) == 16'h0);

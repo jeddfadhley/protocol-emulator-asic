@@ -34,8 +34,8 @@ MUTATIONS = [
     ("pe_engine.v", "crc_step = {c[14:0], 1'b0} ^ ((c[15] ^ b) ? poly : 16'h0000);",
      "crc_step = {c[14:0], 1'b0} ^ ((c[14] ^ b) ? poly : 16'h0000);", "CRC feedback tap wrong"),
     ("pe_engine.v", "          delay_n = dly;", "          delay_n = dly - (dly != 0);", "delay one tick short"),
-    ("pe_engine.v", "wire tick = restart ? 1'b0 : (en ? (divcnt >= clkdiv) : step);",
-     "wire tick = restart ? 1'b0 : (en ? (divcnt > clkdiv) : step);", "clock divider off by one"),
+    ("pe_engine.v", "div_hit <= divcnt_d >= clkdiv_d;",
+     "div_hit <= divcnt_d > clkdiv_d;", "clock divider off by one"),
     ("pe_engine.v", "          else if (pc == wrap_top) pc_n = wrap_bottom;",
      "          else if (pc == wrap_top) pc_n = wrap_bottom + 5'd1;", "wrap lands one late"),
     ("pe_engine.v", "                  osr_n = x;\n", "                  osr_n = y;\n", "non-blocking PULL copies Y"),
@@ -53,7 +53,7 @@ MUTATIONS = [
     ("pe_core.v", "  wire [7:0]  lb_low = (pin_out[7:0] & pin_oe[7:0]) | ~pin_oe[7:0];",
      "  wire [7:0]  lb_low = pin_out[7:0];", "loopback ignores pull-ups"),
     ("pe_core.v", "      sync2   <= sync1;", "      sync2   <= pins_ext;", "one synchronizer stage missing"),
-    ("pe_core.v", "          A_PIN_CLR: pin_out <= out_e1 & ~bus_wdata;", "          A_PIN_CLR: pin_out <= pin_out & ~bus_wdata;",
+    ("pe_core.v", "            pin_out  <= out_e1 & ~bus_wdata;", "            pin_out  <= pin_out & ~bus_wdata;",
      "PIN_CLR drops engine writes"),
     ("pe_fifo.v", "      count <= count + {2'b00, push} - {2'b00, pop};", "      count <= count + {2'b00, push};",
      "FIFO count ignores pops"),
@@ -79,7 +79,7 @@ MUTATIONS = [
      "RAM read does not advance"),
     ("pe_core.v", "A_FLAG_SET: flags <= fl_e1 | bus_wdata[7:0];", "A_FLAG_SET: flags <= bus_wdata[7:0];",
      "FLAG_SET overwrites the flags"),
-    ("pe_core.v", "pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;", "pram[dma_addr] <= rxw0;", "RX DMA stores the wrong engine's word"),
+    ("pe_core.v", "      pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;", "      pram[dma_addr] <= rxw0;", "RX DMA stores the wrong engine's word"),
     ("pe_spi.v", " || bus_addr == 7'h69;", ";", "SPI bursts walk off RAM_DATA"),
     # timing work: half-clock pins, registered CTRL pulses, precomputed tick
     ("pe_core.v", "assign pin_pad = (pin_late & pin_neg) | (~pin_late & pin_out);",
@@ -92,6 +92,10 @@ MUTATIONS = [
      "precomputed divider compare off by one"),
     ("pe_core.v", "step    <= ctrl_w ? bus_wdata[7:6] : 2'b00;", "step    <= ctrl_w ? bus_wdata[5:4] : 2'b00;",
      "STEP pulse wired to the RESTART bits"),
+    ("pe_engine.v", "wire [4:0] pc_d     = restart ? 5'd0 : pc_n;",
+     "wire [4:0] pc_d     = pc_n;", "fetch address misses RESTART"),
+    ("pe_engine.v", "wire [5:0] origin_d = (sel && we && off == R_PROG) ? wdata[5:0] : origin;",
+     "wire [5:0] origin_d = origin;", "fetch address misses a PROG write"),
 ]
 
 
