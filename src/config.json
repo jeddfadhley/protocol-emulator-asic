@@ -31,6 +31,11 @@
   "//": "https://tinytapeout.com/faq/#how-can-i-map-an-additional-external-clock-to-one-of-the-gpios",
   "CLOCK_PORT": "clk",
 
+  "//": "Use all 4 cores of the GitHub runner. Left unset, LibreLane 3.1.0.dev3 passes",
+  "//": "'-threads None' and OpenROAD falls back to one thread (ORD-0032), so routing",
+  "//": "ran past CI's 6-hour limit.",
+  "OPENROAD_THREADS": 4,
+
   "//": "Configuration docs: https://librelane.readthedocs.io/en/latest/reference/configuration.html",
 
   "//": "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!",
