@@ -169,13 +169,13 @@ gate-level netlist. Results:
 |--------|-------|
 | DRC, LVS, antenna, TT precheck | clean |
 | Gate-level chip tests | pass |
-| Standard cells (placed) | 21,878 cells, 0.31 mm² (34% utilisation) |
-| Flip-flops | about 2,000 (1,990 clock sinks) |
-| Setup slack at 50 MHz, typical (1.20 V, 25 °C) | +1.77 ns |
-| Setup slack at 50 MHz, fast (1.32 V, -40 °C) | +8.06 ns |
-| Setup slack at 50 MHz, slow (1.08 V, 125 °C) | -9.43 ns, so about 33 MHz worst case |
+| Standard cells (placed) | 42,168 cells, 0.59 mm² (66% of the 6x4 core) |
+| Flip-flops | 4,138 (half of them the packet RAM) |
+| Setup slack at 50 MHz, typical (1.20 V, 25 °C) | +2.72 ns |
+| Setup slack at 50 MHz, fast (1.32 V, -40 °C) | +3.97 ns |
+| Setup slack at 50 MHz, slow (1.08 V, 125 °C) | -7.86 ns, so about 36 MHz worst case |
 | Hold slack (all corners) | +0.12 ns |
-| Estimated power | 7.5 mW |
+| Estimated power | 21 mW |
 
 The flow optimises timing at the typical corner, as is usual for Tiny
 Tapeout, so 50 MHz is the design's typical rating. All protocol firmware
