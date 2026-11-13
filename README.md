@@ -16,7 +16,7 @@ Digilent Basys 3 FPGA board today ([docs/fpga.md](docs/fpga.md)).
 
 Built for the [Jane Street protocol emulator ASIC competition](https://blog.janestreet.com/protocol-emulator-asic-competition/)
 on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in a
-6x4-tile allocation.
+8x4-tile allocation.
 
 ## Highlights
 
@@ -63,7 +63,7 @@ at robust protocols and at being verifiable:
 - **Lossless host reads.** A FIFO word is only consumed once all 16 bits
   have reached the host. The verification flow found the bug that made this
   necessary.
-- **Small.** Two 16-bit engines plus the packet RAM fit in the 6x4-tile
+- **Small.** Two 16-bit engines plus the packet RAM fit in the 8x4-tile
   slot. PRU is a full 32-bit RISC core.
 
 ## Architecture
