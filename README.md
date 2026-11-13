@@ -28,7 +28,7 @@ on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in a
 | **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at 50 MHz (typical silicon; see [timing](docs/verification.md#6-physical-implementation)) |
 | **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs, all with 2-flop synchronizers |
 | **Host link** | SPI slave: load programs, configure, stream data, debug |
-| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX |
+| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX; added after the hardware freeze: 1-Wire, NEC infrared, PS/2 host, ARM SWD, CAN transmit with arbitration ([docs/new-protocols.md](docs/new-protocols.md)) |
 | **Timing resolution** | 10 ns on every output pin at 50 MHz (half-clock `late` writes) |
 
 ### What is new compared with RP2040 PIO and TI PRU

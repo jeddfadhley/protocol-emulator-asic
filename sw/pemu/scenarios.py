@@ -502,3 +502,8 @@ SCENARIOS = [check_id, uart_tx, uart_tx_timing, uart_rx, uart_loopback, spi, sd_
              i2c, i2c_timeout, ws2812, edge_stamp, single_step, usb_ls_tx,
              eth_loopback, eth_tx, eth_rx, eth_rx_drift, eth_ping,
              usb_ls_rx, usb_ls_rx_slow, usb_ls_rx_fast, usb_loopback]
+
+
+# Protocols written after the hardware freeze (docs/new-protocols.md)
+from .scenarios_ext import EXT_SCENARIOS  # noqa: E402
+SCENARIOS += EXT_SCENARIOS

@@ -146,3 +146,11 @@ bit-banged SPI from MicroPython.
 | `usb_ls_tx.pasm` | USB low-speed packets at exactly 1.5 Mbit/s |
 | `eth_tx.pasm`, `eth_rx.pasm` | 10BASE-T Ethernet: Manchester, link pulses, SFD hunt, DMA ([ethernet.md](ethernet.md)) |
 | `usb_ls_rx.pasm` | USB low-speed receiver/sniffer: re-sync on every edge, timeout-driven sampling, ring DMA |
+| `onewire.pasm` | 1-Wire master: open drain, one slot loop for reads and writes |
+| `nec_ir.pasm` | NEC infrared remote decoder: timing by sampling, timeout trap drops cut-off frames |
+| `ps2_host.pasm` | PS/2 host, both directions: device-driven clock, polling two sources |
+| `swd.pasm` | ARM Serial Wire Debug as a general half-duplex shifter ([`swdhost.py`](../sw/pemu/swdhost.py)) |
+| `can_tx.pasm` | CAN transmitter: arbitration by read-back, timeout as bus-idle detector |
+
+The last five were written after the hardware was frozen, as a test of how
+flexible it is: see [new-protocols.md](new-protocols.md).
