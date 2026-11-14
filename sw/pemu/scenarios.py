@@ -104,7 +104,7 @@ async def uart_loopback(b):
     await b.setup(0, tx, 0, EngineConfig(clkdiv=UART_DIV, out_base=UART_TX_PIN,
                                          set_base=UART_TX_PIN, set_count=1,
                                          out_right=True, x=7))
-    await b.setup(1, rx, len(tx), EngineConfig(clkdiv=UART_DIV, in_base=UART_TX_PIN,
+    await b.setup(1, rx, 0, EngineConfig(clkdiv=UART_DIV, in_base=UART_TX_PIN,
                                                jmp_pin=UART_TX_PIN, in_right=True))
     await b.write(A_PIN_SET, 1 << UART_TX_PIN)
     await b.start(3, loopback=True)
@@ -351,7 +351,7 @@ async def usb_ls_rx_fast(b):
 async def usb_loopback(b):
     """Engine 0 transmits USB, engine 1 sniffs it through the on-chip loopback."""
     await b.setup(0, program("usb_ls_tx"), 0, usb_tx_cfg())
-    await b.setup(1, program("usb_ls_rx"), 16, usb_rx_cfg(USB_DP))
+    await b.setup(1, program("usb_ls_rx"), 0, usb_rx_cfg(USB_DP))
     await b.dma(1, 0, 255, rx=True)
     packets = usb_example_packets()
     words = []
@@ -369,7 +369,6 @@ async def usb_loopback(b):
 
 # ----- 10BASE-T Ethernet (50 MHz clock) -----
 
-ETH_TX_ORIGIN, ETH_RX_ORIGIN = 0, 16
 
 
 def eth_tx_cfg(timeout=0xFFFF, nlp_div=11):
@@ -415,8 +414,8 @@ async def eth_loopback(b):
     """Engine 0 sends a frame, engine 1 receives it, on-chip."""
     frame = eth.with_fcs(eth_hello())
     _, x = eth.rx_words(len(frame))
-    await b.setup(0, program("eth_tx"), ETH_TX_ORIGIN, eth_tx_cfg(timeout=300, nlp_div=1))
-    await b.setup(1, program("eth_rx"), ETH_RX_ORIGIN, eth_rx_cfg(ETH_TD, len(frame)))
+    await b.setup(0, program("eth_tx"), 0, eth_tx_cfg(timeout=300, nlp_div=1))
+    await b.setup(1, program("eth_rx"), 0, eth_rx_cfg(ETH_TD, len(frame)))
     await b.dma(1, 64, 64, rx=True)
     await b.start(3, loopback=True)
     await eth_send(b, eth_hello())
@@ -430,7 +429,7 @@ async def eth_loopback(b):
 async def eth_tx(b):
     """A link partner checks link pulses and every bit's timing."""
     mon = b.monitor(EthMonitor(ETH_TD, ETH_TD + 1))
-    await b.setup(0, program("eth_tx"), ETH_TX_ORIGIN, eth_tx_cfg(timeout=400, nlp_div=2))
+    await b.setup(0, program("eth_tx"), 0, eth_tx_cfg(timeout=400, nlp_div=2))
     await b.start(1)
     await b.run_until(lambda: len(mon.nlps) >= 2, 20_000)
     frames = [eth_hello(1), eth.udp_frame(bytes(range(100)))]
@@ -452,7 +451,7 @@ async def _eth_rx(b, **line):
     max_bytes = 100
     _, x = eth.rx_words(max_bytes)
     src = EthSource(frames, gap_ns=120_000, **line)
-    await b.setup(1, program("eth_rx"), ETH_RX_ORIGIN, eth_rx_cfg(ETH_RD, max_bytes))
+    await b.setup(1, program("eth_rx"), 0, eth_rx_cfg(ETH_RD, max_bytes))
     await b.dma(1, 0, 128, rx=True)
     await b.start(2)
     b.ui(src, ETH_RD - 8)
@@ -498,8 +497,53 @@ async def eth_ping(b):
     assert eth.parse_icmp_echo(pong) == (0, 0x1234, 7, bytes(range(56)))
 
 
+LONG_PROGRAM = (
+    # 64 words that cross between the two 32-word halves: near and far jumps
+    # both ways, and a timeout trap that lands in the upper half.
+    ".trap caught\n"
+    "    set x, 21\n"                  # 0
+    "    jmp high\n"                   # 1: far jump (opcode 6) up to 48
+    "low:\n"
+    "    mov isr, x\n"                 # 2: pushes 7
+    "    push\n"                       # 3
+    "    wait 1 flag 0 timeout\n"      # 4: nothing sets flag 0, so it traps
+    + "    nop\n" * 43 +               # 5-47
+    "high:\n"
+    "    mov isr, x\n"                 # 48: pushes 21
+    "    push\n"                       # 49
+    "    set x, 7\n"                   # 50
+    "    jmp low\n"                    # 51: near jump back down
+    + "    nop\n" * 8 +                # 52-59
+    "caught:\n"
+    "    set x, 31\n"                  # 60
+    "    mov isr, x\n"                 # 61
+    "    push\n"                       # 62
+    "hang:\n"
+    "    jmp hang\n"                   # 63: far jump to itself
+)
+
+
+async def program_memory(b):
+    """Each engine has its own 64-word memory, and a program can use all of it."""
+    from .asm import assemble
+    long = assemble(LONG_PROGRAM)
+    assert len(long) == 64, len(long)
+    # Load engine 0, then engine 1: the second load must not touch engine
+    # 0's memory, although both programs start at address 0.
+    await b.setup(0, long, 0, EngineConfig(timeout=5))
+    await b.setup(1, assemble("set x, 9\nmov isr, x\npush\nhang: jmp hang"), 0, EngineConfig())
+    assert await b.read(0x00) == 0, "instruction memory is write-only"
+    await b.start(3)
+    await b.run(400)
+    assert await b.drain(0, 3) == [21, 7, 31]
+    assert await b.drain(1, 1) == [9]
+    st = await b.status(0)
+    assert st & 31 == 63 & 31 and st >> 15 == 1, f"PC should be 63, STATUS {st:#06x}"
+    assert st & (1 << 12), "the wait should have timed out"
+
+
 SCENARIOS = [check_id, uart_tx, uart_tx_timing, uart_rx, uart_loopback, spi, sd_cmd,
-             i2c, i2c_timeout, ws2812, edge_stamp, single_step, usb_ls_tx,
+             i2c, i2c_timeout, ws2812, edge_stamp, single_step, program_memory, usb_ls_tx,
              eth_loopback, eth_tx, eth_rx, eth_rx_drift, eth_ping,
              usb_ls_rx, usb_ls_rx_slow, usb_ls_rx_fast, usb_loopback]
 

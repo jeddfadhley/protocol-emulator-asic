@@ -338,7 +338,8 @@ docker run --rm -v "$PWD":/work -w /work/fpga/basys3 regymm/openxc7 make
   Vivado script also stops if timing is not met).
 - **On a real Basys 3** (macOS, openFPGALoader, 2026-10-11): the bitstream
   loads, `check` reads the chip ID, the UART and Ethernet self-tests pass,
-  all 128 packet-RAM words and 64 instruction words read back correctly, and
+  all 128 packet-RAM words and 64 instruction words read back correctly (v2;
+  from v3 the instruction memory is write-only), and
   100 out of 100 Ethernet frames of random sizes and contents made it through
   the on-chip 10BASE-T loopback (about 80 ms per round trip, mostly USB
   latency). With the half-clock pins and USB receiver added, the same tests

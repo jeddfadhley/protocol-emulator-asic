@@ -63,11 +63,13 @@ def test_labels_wrap_trap_defines():
     assert p.name == "t"
     assert p.code == [0xE027, 0x0041, 0x0000]
     assert (p.wrap_bottom, p.wrap_top, p.trap) == (1, 1, 2)
-    assert p.prog_reg(10) == 10 | 1 << 6 | 1 << 11
+    assert p.prog_reg(8) == 2 | 1 << 4 | 1 << 10
+    with pytest.raises(ValueError):
+        p.prog_reg(10)  # origins are multiples of 4
 
 
 @pytest.mark.parametrize("bad", [
-    "jmp 32", "in pins, 17", "in pins, 0", "set x, 32", "wait 2 pin 0",
+    "jmp 64", "in pins, 17", "in pins, 0", "set x, 32", "wait 2 pin 0",
     "wait 1 flag 8", "frob x", "jmp maybe, 1", "set flag, 9",
 ])
 def test_errors(bad):
@@ -77,7 +79,7 @@ def test_errors(bad):
 
 def test_too_long():
     with pytest.raises(AsmError):
-        assemble("nop\n" * 33)
+        assemble("nop\n" * 65)
 
 
 @pytest.mark.parametrize("side_count", [0, 1, 2, 3])
@@ -88,3 +90,13 @@ def test_disassemble_round_trip(side_count):
         w = rng.randrange(1 << 16)
         text = disassemble(w, side_count)
         assert assemble(hdr + text).code == [w], text
+
+
+def test_far_jump():
+    """Targets 32-63 use opcode 6, which carries the target's top bit."""
+    p = assemble("start: nop\n" + "nop\n" * 40 + "far: jmp start\njmp far\njmp x--, far")
+    assert len(p) == 44
+    assert p.code[41] == 0x0000                 # jmp 0: opcode 0
+    assert p.code[42] == (6 << 13) | 41 - 32    # jmp 41: opcode 6
+    assert p.code[43] == (6 << 13) | 2 << 5 | 9
+    assert disassemble(p.code[43]) == "jmp x--, 41"

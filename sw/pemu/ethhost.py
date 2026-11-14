@@ -7,7 +7,7 @@ up to 117 bytes including the FCS). Works on any bench (model, RTL).
 """
 
 from . import eth
-from .scenarios import ETH_RD, ETH_RX_ORIGIN, ETH_TX_ORIGIN, eth_rx_cfg, eth_tx_cfg, program
+from .scenarios import ETH_RD, eth_rx_cfg, eth_tx_cfg, program
 
 RX_BASE, RX_WORDS = 0, 64
 TX_BASE, TX_WORDS = 64, 64
@@ -27,8 +27,8 @@ class Station:
     async def start(self):
         b = self.b
         await b.write(0x60, 0)
-        await b.setup(0, program("eth_tx"), ETH_TX_ORIGIN, self.tx_cfg)
-        await b.setup(1, program("eth_rx"), ETH_RX_ORIGIN, self.rx_cfg)
+        await b.setup(0, program("eth_tx"), 0, self.tx_cfg)
+        await b.setup(1, program("eth_rx"), 0, self.rx_cfg)
         await b.flag_clr(3)
         await b.dma(1, RX_BASE, RX_WORDS, rx=True)
         await b.start(3, loopback=self.loopback)

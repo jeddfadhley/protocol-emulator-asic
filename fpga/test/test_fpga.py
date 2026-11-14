@@ -120,7 +120,7 @@ async def test_chip_id(dut):
 
 @cocotb.test()
 async def test_registers(dut):
-    """Write and read back X, PIN_OUT/PIN_OE (seen on the pins) and IMEM."""
+    """Write and read back X, PIN_OUT/PIN_OE (seen on the pins) and the packet RAM."""
     p = await pc(dut)
     await p.write(A_X0, 0xBEEF)
     assert await p.read(A_X0) == [0xBEEF]
@@ -131,8 +131,10 @@ async def test_registers(dut):
     assert int(dut.uo_out.value) & 0x7F == 0x5A & 0x7F
     rng = random.Random(1)
     words = [rng.randrange(1 << 16) for _ in range(64)]
-    await p.write(0, *words)                      # 129-byte transaction
-    assert await p.read(0, 64) == words
+    await p.write(0x68, 0)                        # RAM_ADDR
+    await p.write(0x69, *words)                   # 129-byte transaction to RAM_DATA
+    await p.write(0x68, 0)
+    assert await p.read(0x69, 64) == words
 
 
 @cocotb.test()

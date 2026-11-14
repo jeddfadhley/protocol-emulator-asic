@@ -13,7 +13,7 @@ PEMU is a programmable protocol emulator: a tiny processor whose instruction set
 sampling pins with cycle-exact timing. Hardware protocols (UART, SPI, I2C, WS2812, SD card commands and
 more) are firmware, so new protocols can be added after the chip is made.
 
-- **Two engines** run independent programs from a shared 64-word instruction memory. Each has X/Y
+- **Two engines** run independent programs, each from its own 64-word instruction memory. Each has X/Y
   registers, 16-bit input and output shift registers, 4-word TX and RX FIFOs, a clock divider, and
   side-set pins that change in the same cycle as any instruction.
 - **Every instruction takes exactly 1 + delay ticks**, so the timing is set by the program. The core

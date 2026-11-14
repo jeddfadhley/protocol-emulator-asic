@@ -5,8 +5,9 @@
 
 `default_nettype none
 
-// PEMU core: 64-word instruction memory, two engines, pin registers, event
-// flags, the packet RAM with its DMA channels and the host register bus.
+// PEMU core: two engines, each with its own 64-word instruction memory, pin
+// registers, event flags, the packet RAM with its DMA channels and the host
+// register bus.
 // Matches sw/pemu/model.py (Core).
 module pe_core (
     input  wire        clk,
@@ -31,13 +32,20 @@ module pe_core (
   localparam A_CTRL = 7'h60, A_FLAGS = 7'h61, A_PIN_IN = 7'h62, A_PIN_OUT = 7'h63,
              A_PIN_OE = 7'h64, A_ID = 7'h65, A_PIN_SET = 7'h66, A_PIN_CLR = 7'h67,
              A_RAM_ADDR = 7'h68, A_RAM_DATA = 7'h69, A_DMA0 = 7'h6A, A_DMA1 = 7'h6B,
-             A_FLAG_SET = 7'h6C, A_FLAG_CLR = 7'h6D, A_VERSION = 7'h6E, A_PIN_LATE = 7'h6F;
-  localparam [15:0] CHIP_ID = 16'h5045, VERSION = 16'h0002;
+             A_FLAG_SET = 7'h6C, A_FLAG_CLR = 7'h6D, A_VERSION = 7'h6E, A_PIN_LATE = 7'h6F,
+             A_IMEM_SEL = 7'h70;
+  localparam [15:0] CHIP_ID = 16'h5045, VERSION = 16'h0003;
 
-  reg [15:0] imem[0:63];
+  // One instruction memory per engine, each read only by its engine's fetch.
+  // The host writes them through the 0x00-0x3F window (IMEM_SEL picks which)
+  // and cannot read them back: a host read port would be a third
+  // 64-to-1 multiplexer, and on this process wiring is the scarce resource.
+  reg [15:0] imem0[0:63];
+  reg [15:0] imem1[0:63];
   reg [15:0] pram[0:127];  // packet RAM
   reg [6:0]  ram_addr;     // host port address
   reg [2:0]  ctrl;  // [1:0] engine enables, [2] loopback
+  reg [1:0]  imem_sel;  // which memories a host write reaches: [0] engine 0, [1] engine 1
   reg [7:0]  flags;
   reg [15:0] sync1, sync2;
   reg [15:0] pin_late;  // pins whose last write was "late"
@@ -95,7 +103,11 @@ module pe_core (
   wire [15:0] dma0, dma1;
   wire [6:0]  dma_addr;
   wire        dma_ram_we, dma_sel1, dpush0, dpush1, dpop0, dpop1;
-  wire [15:0] dma_rdata = pram[dma_addr];
+  // The packet RAM has one read port. A host read of RAM_DATA takes it for
+  // that clock and a TX transfer stands aside (pe_dma, host_ram_re).
+  wire        host_ram_re  = bus_re && bus_addr == A_RAM_DATA;
+  wire [15:0] pram_rdata   = pram[host_ram_re ? ram_addr : dma_addr];
+  wire [15:0] dma_rdata    = pram_rdata;
 
   pe_dma u_dma (
       .clk         (clk),
@@ -109,6 +121,7 @@ module pe_core (
       .host_commit0(host_commit0),
       .host_commit1(host_commit1),
       .host_ram_we (host_ram_we),
+      .host_ram_re (host_ram_re),
       .reg_we0     (bus_we && bus_addr == A_DMA0),
       .reg_we1     (bus_we && bus_addr == A_DMA1),
       .wdata       (bus_wdata),
@@ -138,7 +151,7 @@ module pe_core (
       .wdata     (bus_wdata),
       .rdata     (rdata0),
       .fetch_addr(fetch0),
-      .instr     (imem[fetch0]),
+      .instr     (imem0[fetch0]),
       .pin_in    (pin_in),
       .flags     (flags),
       .out_mask  (om0),
@@ -171,7 +184,7 @@ module pe_core (
       .wdata     (bus_wdata),
       .rdata     (rdata1),
       .fetch_addr(fetch1),
-      .instr     (imem[fetch1]),
+      .instr     (imem1[fetch1]),
       .pin_in    (pin_in),
       .flags     (flags),
       .out_mask  (om1),
@@ -204,6 +217,7 @@ module pe_core (
   always @(posedge clk) begin
     if (!rst_n) begin
       ctrl    <= 3'b000;
+      imem_sel <= 2'b11;
       flags   <= 8'h00;
       pin_out <= 16'h0000;
       pin_oe  <= 16'h0000;
@@ -221,6 +235,7 @@ module pe_core (
       if (bus_we) begin
         case (bus_addr)
           A_CTRL:    ctrl <= bus_wdata[2:0];
+          A_IMEM_SEL: imem_sel <= bus_wdata[1:0];
           A_FLAGS:   flags <= bus_wdata[7:0];
           A_PIN_OUT: begin
             pin_out  <= bus_wdata;
@@ -246,31 +261,43 @@ module pe_core (
     end
   end
 
-  // Memories. The instruction memory is written by the host; the packet
+  // Memories. The instruction memories are written by the host; the packet
   // RAM by the host port or an RX transfer (pe_dma never does both in the
   // same clock). On the chip both are flip-flops cleared by reset. FPGA
   // builds define PEMU_LUTRAM: no reset, so they map to LUT RAM, and they
   // start at zero from the bitstream.
+  wire imem_we = bus_we && !bus_addr[6];
 `ifdef PEMU_LUTRAM
   integer k;
   initial begin
-    for (k = 0; k < 64; k = k + 1) imem[k] = 16'h0000;
+    for (k = 0; k < 64; k = k + 1) imem0[k] = 16'h0000;
+    for (k = 0; k < 64; k = k + 1) imem1[k] = 16'h0000;
     for (k = 0; k < 128; k = k + 1) pram[k] = 16'h0000;
   end
   always @(posedge clk) begin
-    if (rst_n && bus_we && !bus_addr[6]) imem[bus_addr[5:0]] <= bus_wdata;
+    if (rst_n && imem_we && imem_sel[0]) imem0[bus_addr[5:0]] <= bus_wdata;
+  end
+  always @(posedge clk) begin
+    if (rst_n && imem_we && imem_sel[1]) imem1[bus_addr[5:0]] <= bus_wdata;
   end
   always @(posedge clk) begin
     if (rst_n && host_ram_we) pram[ram_addr] <= bus_wdata;
     else if (rst_n && dma_ram_we) pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;
   end
 `else
-  integer ki, kp;  // one loop variable per always block (Yosys check)
+  integer ki, kj, kp;  // one loop variable per always block (Yosys check)
   always @(posedge clk) begin
     if (!rst_n) begin
-      for (ki = 0; ki < 64; ki = ki + 1) imem[ki] <= 16'h0000;
-    end else if (bus_we && !bus_addr[6]) begin
-      imem[bus_addr[5:0]] <= bus_wdata;
+      for (ki = 0; ki < 64; ki = ki + 1) imem0[ki] <= 16'h0000;
+    end else if (imem_we && imem_sel[0]) begin
+      imem0[bus_addr[5:0]] <= bus_wdata;
+    end
+  end
+  always @(posedge clk) begin
+    if (!rst_n) begin
+      for (kj = 0; kj < 64; kj = kj + 1) imem1[kj] <= 16'h0000;
+    end else if (imem_we && imem_sel[1]) begin
+      imem1[bus_addr[5:0]] <= bus_wdata;
     end
   end
   always @(posedge clk) begin
@@ -289,7 +316,7 @@ module pe_core (
 
   always @(*) begin
     if (!bus_addr[6]) begin
-      bus_rdata = imem[bus_addr[5:0]];
+      bus_rdata = 16'h0000;  // instruction memory is write-only
     end else if (eng_blk) begin
       bus_rdata = bus_addr[4] ? rdata1 : rdata0;
     end else begin
@@ -301,11 +328,12 @@ module pe_core (
         A_PIN_OE:  bus_rdata = pin_oe;
         A_ID:      bus_rdata = CHIP_ID;
         A_RAM_ADDR: bus_rdata = {9'd0, ram_addr};
-        A_RAM_DATA: bus_rdata = pram[ram_addr];
+        A_RAM_DATA: bus_rdata = pram_rdata;
         A_DMA0:    bus_rdata = dma0;
         A_DMA1:    bus_rdata = dma1;
         A_VERSION: bus_rdata = VERSION;
         A_PIN_LATE: bus_rdata = pin_late;
+        A_IMEM_SEL: bus_rdata = {14'd0, imem_sel};
         default:   bus_rdata = 16'h0000;
       endcase
     end

@@ -17,13 +17,14 @@ from dataclasses import dataclass, field
 M16 = 0xFFFF
 FIFO_DEPTH = 4
 RAM_WORDS = 128
+IMEM_WORDS = 64  # per engine
 
 # Global register addresses
 (A_CTRL, A_FLAGS, A_PIN_IN, A_PIN_OUT, A_PIN_OE, A_ID, A_PIN_SET, A_PIN_CLR,
  A_RAM_ADDR, A_RAM_DATA, A_DMA0, A_DMA1, A_FLAG_SET, A_FLAG_CLR, A_VERSION,
- A_PIN_LATE) = range(0x60, 0x70)
+ A_PIN_LATE, A_IMEM_SEL) = range(0x60, 0x71)
 CHIP_ID = 0x5045
-VERSION = 0x0002
+VERSION = 0x0003
 
 # Engine register offsets
 (R_CLKDIV, R_PROG, R_PINMAP, R_PINCFG, R_SHIFT, R_TIMEOUT, R_TRAP, R_CRCPOLY,
@@ -118,7 +119,7 @@ class Effects:
 class Engine:
     # configuration
     clkdiv: int = 0
-    prog: int = 0xF800
+    prog: int = 0xFC00
     pinmap: int = 0
     pincfg: int = 0
     shift: int = 0
@@ -151,11 +152,11 @@ class Engine:
 
     # decoded configuration fields
     @property
-    def origin(self): return self.prog & 63
+    def origin(self): return (self.prog & 15) << 2   # in units of 4 words
     @property
-    def wrap_bottom(self): return (self.prog >> 6) & 31
+    def wrap_bottom(self): return (self.prog >> 4) & 63
     @property
-    def wrap_top(self): return (self.prog >> 11) & 31
+    def wrap_top(self): return (self.prog >> 10) & 63
     @property
     def out_base(self): return self.pinmap & 15
     @property
@@ -194,7 +195,9 @@ class Engine:
     def crc_out(self): return (self.shift >> 13) & 1
 
     def status(self):
-        return (self.pc | len(self.txf) << 5 | len(self.rxf) << 8 | self.stalled << 11
+        # PC bits 4:0 at [4:0] and bit 5 at [15], so the v2 layout still holds
+        return ((self.pc & 31) | len(self.txf) << 5 | len(self.rxf) << 8 | self.stalled << 11
+                | (self.pc >> 5) << 15
                 | self.timed_out << 12 | self.rx_ovf << 13 | self.tx_ovf << 14)
 
     def restart(self):
@@ -228,8 +231,8 @@ class Engine:
         jump = None
         pins = Effects()  # instruction's own pin writes, merged under side-set
 
-        if op == 0:  # JMP
-            cond, addr = (ins >> 5) & 7, ins & 31
+        if op in (0, 6):  # JMP; op 6 reaches the upper 32 words
+            cond, addr = (ins >> 5) & 7, (ins & 31) | (32 if op == 6 else 0)
             take = [True, self.x == 0, self.x != 0, self.y == 0, self.y != 0,
                     self.x != self.y, pin(self.jmp_pin) == 1,
                     self.osr_cnt < self.pull_thresh][cond]
@@ -308,7 +311,7 @@ class Engine:
                 elif dst == 4:
                     pins.write_pins(1, self.out_base, n, data)
                 elif dst == 5:
-                    jump = data & 31
+                    jump = data & 63
                 elif dst == 6:
                     self.isr, self.isr_cnt = data, n
                 if self.crc_out and n == 1:
@@ -358,7 +361,7 @@ class Engine:
             elif dst == 4:
                 pins.write_pins(1, self.out_base, self.out_count, v)
             elif dst == 5:
-                jump = v & 31
+                jump = v & 63
             elif dst == 6:
                 self.isr, self.isr_cnt = v, 0
             elif dst == 7:
@@ -380,8 +383,6 @@ class Engine:
             elif dst == 4:
                 pins.write_pins(1, self.set_base, self.set_count, imm)
 
-        # op 6 is reserved and completes as a NOP
-
         # Instruction pin writes, then side-set on top (side-set wins).
         fx.out_mask, fx.out_val, fx.late_val = pins.out_mask, pins.out_val, pins.late_val
         fx.oe_mask, fx.oe_val = pins.oe_mask, pins.oe_val
@@ -396,7 +397,7 @@ class Engine:
             elif self.pc == self.wrap_top:
                 self.pc = self.wrap_bottom
             else:
-                self.pc = (self.pc + 1) & 31
+                self.pc = (self.pc + 1) & 63
             self.delay = dly
             self.to_cnt = 0
             self.armed = 0
@@ -414,13 +415,14 @@ class Engine:
 
 
 class Core:
-    """The PEMU core: instruction memory, two engines, pins and flags."""
+    """The PEMU core: two engines with their instruction memories, pins and flags."""
 
     def __init__(self):
         self.reset()
 
     def reset(self):
-        self.imem = [0] * 64
+        self.imem = [[0] * IMEM_WORDS, [0] * IMEM_WORDS]  # one per engine
+        self.imem_sel = 3   # IMEM_SEL: memories a host write reaches
         self.ram = [0] * RAM_WORDS
         self.ram_addr = 0
         self.dma = [0, 0]
@@ -459,7 +461,7 @@ class Core:
     def read(self, addr):
         addr &= 0x7F
         if addr < 0x40:
-            return self.imem[addr]
+            return 0  # instruction memory is write-only
         if addr < 0x60:
             e = self.engines[(addr >> 4) & 1]
             off = addr & 15
@@ -475,7 +477,7 @@ class Core:
             A_PIN_OUT: self.pin_out, A_PIN_OE: self.pin_oe, A_ID: CHIP_ID,
             A_RAM_ADDR: self.ram_addr, A_RAM_DATA: self.ram[self.ram_addr],
             A_DMA0: self.dma[0], A_DMA1: self.dma[1], A_VERSION: VERSION,
-            A_PIN_LATE: self.pin_late,
+            A_PIN_LATE: self.pin_late, A_IMEM_SEL: self.imem_sel,
         }.get(addr, 0)
 
     # ----- one clock -----
@@ -508,7 +510,7 @@ class Core:
                 e.divcnt = 0
                 tick = step[i]
             if tick:
-                e.execute(pin_in, self.flags, self.imem, fx)
+                e.execute(pin_in, self.flags, self.imem[i], fx)
 
         # Shared state: engine 0, then engine 1, then the host.
         pin_out, pin_oe, flags = self.pin_out, self.pin_oe, self.flags
@@ -520,9 +522,11 @@ class Core:
             flags = (flags & ~fx.flag_clr) | fx.flag_set
 
         # DMA: at most one transfer per clock, channel 0 first. A channel
-        # stands aside when the host uses the same FIFO (or, for RX, writes
-        # the RAM) in this clock.
+        # stands aside when the host uses the same FIFO, or the RAM in the
+        # same direction (RX when the host writes it, TX when it reads it),
+        # in this clock.
         ram_we = we and addr == A_RAM_DATA
+        ram_re = re and addr == A_RAM_DATA  # takes the RAM's one read port
         dma_push, dma_pop = [None, None], [False, False]
         dma_next = list(self.dma)
         ram = self.ram
@@ -536,7 +540,7 @@ class Core:
             if drx:
                 ok = e.rxf and not (rc and addr == fifo) and not ram_we
             else:
-                ok = len(e.txf) < FIFO_DEPTH and not (we and addr == fifo)
+                ok = len(e.txf) < FIFO_DEPTH and not (we and addr == fifo) and not ram_re
             if not ok:
                 continue
             if drx:
@@ -583,7 +587,9 @@ class Core:
         # Host writes override everything else this cycle.
         if we:
             if addr < 0x40:
-                self.imem[addr] = wdata
+                for i in range(2):
+                    if self.imem_sel >> i & 1:
+                        self.imem[i][addr] = wdata
             elif addr < 0x60:
                 e = self.engines[(addr >> 4) & 1]
                 off = addr & 15
@@ -593,7 +599,7 @@ class Core:
                 elif off == R_PINCFG: e.pincfg = wdata & PINCFG_MASK
                 elif off == R_SHIFT: e.shift = wdata & SHIFT_MASK
                 elif off == R_TIMEOUT: e.timeout = wdata
-                elif off == R_TRAP: e.trap = wdata & 31
+                elif off == R_TRAP: e.trap = wdata & 63
                 elif off == R_CRCPOLY: e.crcpoly = wdata
                 elif off == R_CRC: e.crc = wdata
                 elif off == R_X: e.x = wdata
@@ -604,6 +610,8 @@ class Core:
                     if wdata >> 14 & 1: e.tx_ovf = 0
             elif addr == A_CTRL:
                 self.ctrl = wdata & 7
+            elif addr == A_IMEM_SEL:
+                self.imem_sel = wdata & 3
             elif addr == A_FLAGS:
                 flags = wdata & 0xFF
             elif addr == A_PIN_OUT:

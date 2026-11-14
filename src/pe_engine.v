@@ -111,16 +111,17 @@ module pe_engine (
   reg [15:0] clkdiv, prog, pinmap, timeout, crcpoly;
   reg [15:0] pincfg;  // only bits in 0xF7FF are stored
   reg [13:0] shiftcfg;
-  reg [4:0]  trap;
+  reg [5:0]  trap;
 
   reg [15:0] crc, x, y, isr, osr, to_cnt, time_cnt, divcnt;
-  reg [4:0]  pc, delay, isr_cnt, osr_cnt;
+  reg [5:0]  pc;
+  reg [4:0]  delay, isr_cnt, osr_cnt;
   reg        armed, edge_lvl, stalled, timed_out, rx_ovf, tx_ovf;
 
   // Decoded configuration
-  wire [5:0] origin      = prog[5:0];
-  wire [4:0] wrap_bottom = prog[10:6];
-  wire [4:0] wrap_top    = prog[15:11];
+  wire [5:0] origin      = {prog[3:0], 2'b00};  // in units of 4 words
+  wire [5:0] wrap_bottom = prog[9:4];
+  wire [5:0] wrap_top    = prog[15:10];
   wire [3:0] out_base    = pinmap[3:0];
   wire [3:0] set_base    = pinmap[7:4];
   wire [3:0] side_base   = pinmap[11:8];
@@ -223,19 +224,20 @@ module pe_engine (
 
   // Next-state values computed by the executor
   reg [15:0] x_n, y_n, isr_n, osr_n, crc_n, to_cnt_n, time_n;
-  reg [4:0]  pc_n, delay_n, isr_cnt_n, osr_cnt_n;
+  reg [5:0]  pc_n;
+  reg [4:0]  delay_n, isr_cnt_n, osr_cnt_n;
   reg        armed_n, edge_lvl_n, stalled_n, timed_out_n, rx_ovf_n;
 
   // The fetch address (ORIGIN + PC) is registered, computed a clock early
   // from the next PC and ORIGIN, so the add is not in front of the fetch.
   reg  [5:0] fetch_q;
-  wire [5:0] origin_d = (sel && we && off == R_PROG) ? wdata[5:0] : origin;
-  wire [4:0] pc_d     = restart ? 5'd0 : pc_n;
+  wire [5:0] origin_d = (sel && we && off == R_PROG) ? {wdata[3:0], 2'b00} : origin;
+  wire [5:0] pc_d     = restart ? 6'd0 : pc_n;
   assign fetch_addr = fetch_q;
 
   // Scratch
   reg        done, trapped, jump;
-  reg [4:0]  jump_addr;
+  reg [5:0]  jump_addr;
   reg        cond;
   reg        p;
   reg [15:0] v, data, src, wmask;
@@ -282,7 +284,7 @@ module pe_engine (
     done = 1'b1;
     trapped = 1'b0;
     jump = 1'b0;
-    jump_addr = 5'd0;
+    jump_addr = 6'd0;
     cond = 1'b0;
     p = 1'b0;
     v = 16'h0000;
@@ -304,8 +306,8 @@ module pe_engine (
         stalled_n = 1'b0;
       end else begin
         case (op)
-          // ---------------- JMP
-          3'd0: begin
+          // ---------------- JMP (op 6 is JMP to the upper 32 words)
+          3'd0, 3'd6: begin
             case (instr[7:5])
               3'd0: cond = 1'b1;
               3'd1: cond = (x == 16'h0000);
@@ -319,7 +321,7 @@ module pe_engine (
             if (instr[7:5] == 3'd2) x_n = x - 16'd1;
             if (instr[7:5] == 3'd4) y_n = y - 16'd1;
             jump = cond;
-            jump_addr = instr[4:0];
+            jump_addr = {op[1], instr[4:0]};
           end
 
           // ---------------- WAIT
@@ -416,7 +418,7 @@ module pe_engine (
                 end
                 3'd5: begin
                   jump = 1'b1;
-                  jump_addr = data[4:0];
+                  jump_addr = data[5:0];
                 end
                 3'd6: begin
                   isr_n = data;
@@ -486,7 +488,7 @@ module pe_engine (
               end
               3'd5: begin
                 jump = 1'b1;
-                jump_addr = v[4:0];
+                jump_addr = v[5:0];
               end
               3'd6: begin
                 isr_n = v;
@@ -521,7 +523,6 @@ module pe_engine (
             endcase
           end
 
-          // ---------------- 3'd6: reserved, NOP
           default: ;
         endcase
 
@@ -560,7 +561,7 @@ module pe_engine (
         if (done) begin
           if (jump) pc_n = jump_addr;
           else if (pc == wrap_top) pc_n = wrap_bottom;
-          else pc_n = pc + 5'd1;
+          else pc_n = pc + 6'd1;
           delay_n = dly;
           to_cnt_n = 16'h0000;
           armed_n = 1'b0;
@@ -588,17 +589,17 @@ module pe_engine (
   always @(posedge clk) begin
     if (!rst_n) begin
       clkdiv <= 16'h0000;
-      prog <= 16'hF800;
+      prog <= 16'hFC00;
       pinmap <= 16'h0000;
       pincfg <= 16'h0000;
       shiftcfg <= 14'h0000;
       timeout <= 16'hFFFF;
-      trap <= 5'd0;
+      trap <= 6'd0;
       crcpoly <= 16'h0000;
       crc <= 16'h0000;
       x <= 16'h0000;
       y <= 16'h0000;
-      pc <= 5'd0;
+      pc <= 6'd0;
       delay <= 5'd0;
       isr <= 16'h0000;
       isr_cnt <= 5'd0;
@@ -621,7 +622,7 @@ module pe_engine (
       else if (host_commit) pop_armed <= 1'b0;
 
       if (restart) begin
-        pc <= 5'd0;
+        pc <= 6'd0;
         delay <= 5'd0;
         isr <= 16'h0000;
         isr_cnt <= 5'd0;
@@ -652,7 +653,7 @@ module pe_engine (
       end
       divcnt  <= divcnt_d;
       div_hit <= divcnt_d >= clkdiv_d;
-      fetch_q <= origin_d + {1'b0, pc_d};
+      fetch_q <= origin_d + pc_d;
 
       if (host_push && tx_count == 3'd4) tx_ovf <= 1'b1;
 
@@ -664,7 +665,7 @@ module pe_engine (
           R_PINCFG:  pincfg <= wdata & 16'hF7FF;
           R_SHIFT:   shiftcfg <= wdata[13:0];
           R_TIMEOUT: timeout <= wdata;
-          R_TRAP:    trap <= wdata[4:0];
+          R_TRAP:    trap <= wdata[5:0];
           R_CRCPOLY: crcpoly <= wdata;
           R_CRC:     crc <= wdata;
           R_X:       x <= wdata;
@@ -691,14 +692,14 @@ module pe_engine (
       R_PINCFG:  rdata = pincfg;
       R_SHIFT:   rdata = {2'b00, shiftcfg};
       R_TIMEOUT: rdata = timeout;
-      R_TRAP:    rdata = {11'd0, trap};
+      R_TRAP:    rdata = {10'd0, trap};
       R_CRCPOLY: rdata = crcpoly;
       R_CRC:     rdata = crc;
       R_X:       rdata = x;
       R_Y:       rdata = y;
       R_ISR:     rdata = isr;
       R_OSR:     rdata = osr;
-      R_STATUS:  rdata = {1'b0, tx_ovf, rx_ovf, timed_out, stalled, rx_count, tx_count, pc};
+      R_STATUS:  rdata = {pc[5], tx_ovf, rx_ovf, timed_out, stalled, rx_count, tx_count, pc[4:0]};
       R_TIME:    rdata = time_cnt;
       default:   rdata = (rx_count == 3'd0) ? 16'h0000 : rx_head;
     endcase
@@ -736,7 +737,7 @@ module pe_engine (
     // The precomputed divider compare is always right
     if (f_past_valid && rst_n) assert (div_hit == (divcnt >= clkdiv));
     // ...and so is the registered fetch address
-    if (f_past_valid && rst_n) assert (fetch_q == origin + {1'b0, pc});
+    if (f_past_valid && rst_n) assert (fetch_q == origin + pc);
 
     // Late writes only ever mark pins that are being written
     assert ((late_val & ~out_mask) == 16'h0);

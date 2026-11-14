@@ -32,10 +32,10 @@ ENGINE_FIELDS = [
 
 
 PROFILES = {
-    # opcode weights:  JMP WAIT IN OUT P/P MOV rsv SET
-    "mixed":          [14, 10, 12, 12, 8, 14, 2, 14],
-    "datapath":       [8, 2, 22, 22, 18, 14, 1, 8],
-    "control":        [24, 16, 6, 6, 4, 14, 1, 20],
+    # opcode weights:  JMP WAIT IN OUT P/P MOV JMP_HI SET
+    "mixed":          [8, 10, 12, 12, 8, 14, 8, 14],
+    "datapath":       [4, 2, 22, 22, 18, 14, 4, 8],
+    "control":        [12, 16, 6, 6, 4, 14, 12, 20],
 }
 
 
@@ -69,7 +69,7 @@ def random_engine_config(rng, e):
         3: rng.randrange(1 << 16),                                    # PINCFG
         4: random_shift(rng),                                         # SHIFT
         5: rng.choice([0, 1, 3, 7, 20, rng.randrange(64)]),           # TIMEOUT
-        6: rng.randrange(32),                                         # TRAP
+        6: rng.randrange(64),                                         # TRAP
         7: rng.randrange(1 << 16),                                    # CRCPOLY
         8: rng.randrange(1 << 16),                                    # CRC
         9: rng.choice([0, 1, 5, rng.randrange(1 << 16)]),             # X
@@ -97,7 +97,7 @@ def random_bus_op(rng):
         return 0, int(load), int(not load), addr, 0
     addr = rng.choice([0x4F, 0x5F] * 6 + [0x60, 0x61, 0x63, 0x64, 0x66, 0x67,
                        0x4D, 0x5D, 0x49, 0x4A, 0x59, 0x5A, rng.randrange(128)]
-                      + [0x68, 0x69, 0x69, 0x6A, 0x6B, 0x6A, 0x6B, 0x6C, 0x6D])
+                      + [0x68, 0x69, 0x69, 0x6A, 0x6B, 0x6A, 0x6B, 0x6C, 0x6D, 0x70])
     wdata = rng.randrange(1 << 16)
     if addr == 0x60:
         # Mostly keep both engines enabled; occasionally pulse restart/step/flush
@@ -120,7 +120,11 @@ async def run_seed(dut, seed, coverage):
     script = [(0x60, 0)]
     profile = rng.choice(list(PROFILES))
     coverage[f"profile_{profile}"] += 1
-    script += [(a, random_instr(rng, profile)) for a in range(64)]
+    if rng.random() < 0.5:  # one program into both memories (IMEM_SEL = 3 from reset)
+        script += [(a, random_instr(rng, profile)) for a in range(64)]
+    else:                   # a different program for each engine
+        for e in (0, 1):
+            script += [(0x70, 1 << e)] + [(a, random_instr(rng, profile)) for a in range(64)]
     script += random_engine_config(rng, 0) + random_engine_config(rng, 1)
     script += [(0x63, rng.randrange(1 << 16)), (0x64, rng.randrange(1 << 16))]
     script += [(0x68, 0)] + [(0x69, rng.randrange(1 << 16)) for _ in range(RAM_WORDS)]
@@ -172,7 +176,9 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
         # Compare the state the clock edge will act on
         ctx = f"{name} cycle {cyc}"
         exp_rdata = model.read(addr)
-        assert int(dut.bus_rdata.value) == exp_rdata, \
+        # RAM_DATA is only defined on a read load: otherwise the RAM's one
+        # read port belongs to the DMA.
+        assert (addr == 0x69 and not re) or int(dut.bus_rdata.value) == exp_rdata, \
             f"{ctx}: rdata[{addr:#x}] {int(dut.bus_rdata.value):#06x} != {exp_rdata:#06x}"
         assert int(dut.pin_out.value) == model.pin_out, f"{ctx}: pin_out"
         assert sig(dut, "dut.pin_late") == model.pin_late, f"{ctx}: pin_late"
@@ -193,7 +199,7 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
             assert int(rtl.tx_count.value) == len(e.txf), f"{ctx}: engine {i} tx level"
             assert int(rtl.rx_count.value) == len(e.rxf), f"{ctx}: engine {i} rx level"
             if (model.ctrl >> i) & 1 and e.delay == 0 and e.divcnt >= e.clkdiv:
-                ins = model.imem[(e.origin + e.pc) & 63]
+                ins = model.imem[i][(e.origin + e.pc) & 63]
                 coverage[f"op{ins >> 13}"] += 1
                 if ins >> 13 == 1 and (ins >> 5) & 3 == 3:
                     coverage["wait_any_edge" if ins & 8 else "wait_edge"] += 1
@@ -271,7 +277,7 @@ async def test_lockstep_directed(dut):
                 for e, thr in ((0, t), (1, n)):
                     b = 0x40 + 16 * e
                     f = thr & 15
-                    script += [(b + 1, (len(code) - 1) << 11),
+                    script += [(b + 1, (len(code) - 1) << 10),
                                (b + 4, f << 4 | f << 8 | auto | rng.randrange(4)),
                                (b + 9, rng.randrange(1 << 16))]
                 script += [(0x60, 0x33)]
@@ -316,7 +322,7 @@ async def test_lockstep_features(dut):
                           | int(kind.startswith("diff") or rng.random() < 0.5) << 10
                           | rng.randrange(16) << 12)
                 pinmap = ob | ob << 4 | rng.choice([ob, rng.randrange(16)]) << 8 | rng.randrange(16) << 12
-                script += [(b + 1, (len(prog.code) - 1) << 11), (b + 2, pinmap), (b + 3, pincfg),
+                script += [(b + 1, (len(prog.code) - 1) << 10), (b + 2, pinmap), (b + 3, pincfg),
                            (b + 4, 0x3 | rng.choice([0, 0xC])), (b + 5, rng.choice([3, 8, 30])),
                            (b + 0, rng.choice([0, 0, 1, 2])),
                            (b + 9, rng.randrange(1 << 16)), (b + 10, rng.randrange(1 << 16))]

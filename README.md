@@ -23,7 +23,7 @@ on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in a
 | | |
 |---|---|
 | **Engines** | 2, each with X/Y, 16-bit in/out shift registers, 4-word TX/RX FIFOs, clock divider, side-set, CRC unit, timestamp counter |
-| **Program memory** | 64 x 16-bit words, shared; programs are relocatable (up to 32 instructions each) |
+| **Program memory** | 64 x 16-bit words per engine; programs up to 64 instructions, relocatable |
 | **Packet RAM + DMA** | 128 x 16-bit words; one DMA channel per engine streams frames at wire speed |
 | **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at 50 MHz (typical silicon; see [timing](docs/verification.md#6-physical-implementation)) |
 | **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs, all with 2-flop synchronizers |
@@ -73,7 +73,7 @@ at robust protocols and at being verifiable:
         │ SPI: CS_N/SCK/MOSI on ui_in[6:4], MISO on uo_out[7]
   ┌─────▼──────┐  register bus  ┌──────────────────────────────────────────┐
   │  pe_spi    ├───────────────►│ pe_core                                  │
-  └────────────┘                │  instruction memory (64 x 16)            │
+  └────────────┘                │  instruction memory (2 x 64 x 16)        │
                                 │  ┌───────────────┐   ┌───────────────┐   │
                                 │  │ pe_engine 0   │   │ pe_engine 1   │   │
                                 │  │ PC X Y ISR OSR│   │ PC X Y ISR OSR│   │

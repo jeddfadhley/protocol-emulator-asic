@@ -15,8 +15,9 @@ needed a workaround, and what did not fit.
 | ARM Serial Wire Debug | [`swd.pasm`](../sw/programs/swd.pasm) | 13 | side-set clock, autopush/autopull, turnaround | packets, parity ([`swdhost.py`](../sw/pemu/swdhost.py)) |
 | CAN 2.0A transmit with arbitration | [`can_tx.pasm`](../sw/programs/can_tx.pasm) | 21 | bus read-back, timeout as idle detector, packet RAM + DMA, event flag | CRC-15, bit stuffing ([`can.py`](../sw/pemu/can.py)) |
 
-Every program fits in one engine's 32-instruction half of the program memory,
-so any two of them can run at once.
+Every program fits in the 32 instructions an engine could address at the
+time, so any two of them can run at once. (Since v3 each engine has its own
+64-word memory.)
 
 ## How they are tested
 
@@ -143,7 +144,8 @@ next hardware changes:
 3. **A configurable reset level for `uo_out`** would make every output pin
    safe for buses that must idle high.
 4. **More program memory**: the PS/2 host already uses 29 of the 32 words one
-   engine can have.
+   engine can have. *Done in v3:* each engine now has its own 64-word memory
+   and programs can be 64 instructions long (see below).
 
 ## Running them on real hardware
 

@@ -16,7 +16,7 @@ class HostApi:
             await self.write(a, v)
 
     async def setup(self, engine, program, origin, cfg):
-        await self.apply(load_writes(program, origin))
+        await self.apply(load_writes(engine, program, origin))
         await self.apply(config_writes(engine, program, origin, cfg))
 
     async def start(self, mask, loopback=False):

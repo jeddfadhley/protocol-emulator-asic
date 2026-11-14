@@ -7,7 +7,7 @@ hardware.
 
 from dataclasses import dataclass
 
-from .model import (A_CTRL, R_CLKDIV, R_CRC, R_CRCPOLY, R_PINCFG, R_PINMAP,
+from .model import (A_CTRL, A_IMEM_SEL, IMEM_WORDS, R_CLKDIV, R_CRC, R_CRCPOLY, R_PINCFG, R_PINMAP,
                     R_PROG, R_SHIFT, R_TIMEOUT, R_TRAP, R_X, R_Y, engine_base)
 
 
@@ -52,11 +52,14 @@ class EngineConfig:
                 | int(self.crc_out) << 13)
 
 
-def load_writes(program, origin):
-    """Register writes that place a program in instruction memory."""
-    if origin + len(program) > 64:
+def load_writes(engine, program, origin=0):
+    """Register writes that place a program in an engine's instruction memory.
+
+    `engine` is 0, 1, or "both" (the same program into both memories)."""
+    if origin % 4 or origin + len(program) > IMEM_WORDS:
         raise ValueError("program does not fit at this origin")
-    return [(origin + i, w) for i, w in enumerate(program.code)]
+    sel = 3 if engine == "both" else 1 << engine
+    return [(A_IMEM_SEL, sel)] + [(origin + i, w) for i, w in enumerate(program.code)]
 
 
 def config_writes(engine, program, origin, cfg):
@@ -85,7 +88,7 @@ def ctrl(enable=0, loopback=False, restart=0, step=0, flush=0):
 
 def setup_writes(engine, program, origin, cfg):
     """Load + configure + restart (engine left disabled)."""
-    return (load_writes(program, origin) + config_writes(engine, program, origin, cfg))
+    return (load_writes(engine, program, origin) + config_writes(engine, program, origin, cfg))
 
 
 class ModelHost:

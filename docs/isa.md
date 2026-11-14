@@ -1,7 +1,7 @@
-# PEMU architecture and ISA reference (v2)
+# PEMU architecture and ISA reference (v3)
 
-PEMU is a programmable protocol emulator. Two small **engines** run programs
-from a shared 64-word instruction memory and drive or sample up to 16 pins
+PEMU is a programmable protocol emulator. Two small **engines**, each with
+its own 64-word instruction memory, run programs and drive or sample up to 16 pins
 with cycle-exact timing. A host (for example the RP2040 on the Tiny Tapeout
 demo board) loads programs and moves data over an SPI slave interface. A
 128-word **packet RAM** with two DMA channels feeds the engines at wire
@@ -61,7 +61,7 @@ Each engine has:
 
 | State      | Width | Notes |
 |------------|-------|-------|
-| `PC`       | 5     | relative to `ORIGIN` |
+| `PC`       | 6     | relative to `ORIGIN` |
 | `X`, `Y`   | 16    | scratch registers and loop counters |
 | `ISR`      | 16    | input shift register, with a bit count of 0-16 |
 | `OSR`      | 16    | output shift register, with a count of 0-16 (16 = empty) |
@@ -76,7 +76,8 @@ An engine advances on a **tick**. With `CLKDIV = N`, a tick happens every
 N+1 clocks. On each tick:
 
 1. If the delay counter is non-zero it decrements, and nothing else happens.
-2. Otherwise the instruction at `(ORIGIN + PC) mod 64` executes. It either
+2. Otherwise the instruction at `(ORIGIN + PC) mod 64` in the engine's own
+   instruction memory executes. It either
    **completes**, or **stalls** (a WAIT whose condition is false, a blocking
    PUSH/PULL, or autopush/autopull that cannot proceed). A stalled
    instruction runs again on the next tick.
@@ -91,7 +92,7 @@ value from before its own tick's increment.
 evaluated, including stalled ticks. They are not written during delay ticks.
 
 **Next PC:** if the instruction does not jump and `PC == WRAP_TOP`, the next PC
-is `WRAP_BOTTOM`. Otherwise it is `PC + 1` (mod 32). Wrapping costs no cycles.
+is `WRAP_BOTTOM`. Otherwise it is `PC + 1` (mod 64). Wrapping costs no cycles.
 
 ### 2.2 Wait timeouts (trap)
 
@@ -150,14 +151,19 @@ delay (0-31 with no side-set). Bit counts written `n` below are encoded in
 
 | Op  | Name      | Operands |
 |-----|-----------|----------|
-| 000 | JMP       | [7:5] cond, [4:0] addr |
+| 000 | JMP       | [7:5] cond, [4:0] addr (target 0-31) |
 | 001 | WAIT      | [7] pol, [6:5] src, [4] T, [3:0] index |
 | 010 | IN        | [7:5] src, [3:0] n |
 | 011 | OUT       | [7:5] dst, [3:0] n |
 | 100 | PUSH/PULL | [7] 0 = push, 1 = pull; [6] if-full/if-empty; [5] block |
 | 101 | MOV       | [7:5] dst, [4:3] op, [2:0] src |
-| 110 | (reserved, executes as NOP) | |
+| 110 | JMP       | [7:5] cond, [4:0] addr (target 32 + addr) |
 | 111 | SET       | [7:5] dst, [4:0] imm |
+
+Opcodes 000 and 110 are the same JMP; the opcode supplies bit 5 of the
+target, so a jump reaches any of the 64 words. The assembler picks the
+opcode from the target. (In v2, 110 was reserved and only 32 words were
+reachable.) `OUT PC` and `MOV PC` take the low 6 bits of their value.
 
 ### JMP conditions
 
@@ -247,8 +253,9 @@ Each engine has one DMA channel (`DMA0`, `DMA1`) that moves words between the
 RAM and that engine's FIFOs with no host involvement:
 
 - **TX** (`DIR` = 0): RAM to TX FIFO. A transfer happens when the TX FIFO
-  held fewer than 4 words at the start of the clock and the host is not
-  writing that engine's FIFO port in the same clock.
+  held fewer than 4 words at the start of the clock, the host is not
+  writing that engine's FIFO port, and the host is not loading a read of
+  `RAM_DATA` in the same clock (the RAM has one read port).
 - **RX** (`DIR` = 1): RX FIFO to RAM. A transfer happens when the RX FIFO
   held at least one word at the start of the clock, the host is not
   committing a read of that FIFO port, and the host is not writing
@@ -290,7 +297,7 @@ as 0 without losing a word that arrives during the read.
 
 | Addr        | Name     | Description |
 |-------------|----------|-------------|
-| 0x00-0x3F   | IMEM     | instruction memory |
+| 0x00-0x3F   | IMEM     | write only: instruction memory word `addr`, of the engines selected by `IMEM_SEL`. Reads return 0. |
 | 0x40 + 16e  | engine e block, below | |
 | 0x60        | CTRL     | [0] EN0, [1] EN1, [2] LOOPBACK. Write-only pulses, acting on the clock after the write: [4] RESTART0, [5] RESTART1, [6] STEP0, [7] STEP1, [8] FLUSH0, [9] FLUSH1 |
 | 0x61        | FLAGS    | [7:0] event flags |
@@ -306,27 +313,28 @@ as 0 without losing a word that arrives during the read.
 | 0x6B        | DMA1     | engine 1 channel, same layout |
 | 0x6C        | FLAG_SET | write only: `FLAGS \|= value[7:0]` |
 | 0x6D        | FLAG_CLR | write only: `FLAGS &= ~value[7:0]` |
-| 0x6E        | VERSION  | read only: `0x0002` |
+| 0x6E        | VERSION  | read only: `0x0003` |
 | 0x6F        | PIN_LATE | read only: pins whose last value write was late (see 1, half-clock timing) |
+| 0x70        | IMEM_SEL | [0] engine 0, [1] engine 1: the instruction memories an `IMEM` write reaches. Reset 3 (both). |
 
 Engine block offsets:
 
 | Off | Name     | Reset  | Fields |
 |-----|----------|--------|--------|
 | 0x0 | CLKDIV   | 0      | tick every CLKDIV+1 clocks |
-| 0x1 | PROG     | 0xF800 | [5:0] ORIGIN, [10:6] WRAP_BOTTOM, [15:11] WRAP_TOP |
+| 0x1 | PROG     | 0xFC00 | [3:0] ORIGIN / 4, [9:4] WRAP_BOTTOM, [15:10] WRAP_TOP |
 | 0x2 | PINMAP   | 0      | [3:0] OUT_BASE, [7:4] SET_BASE, [11:8] SIDE_BASE, [15:12] IN_BASE |
 | 0x3 | PINCFG   | 0      | [3:0] OUT_COUNT (0 = 16), [6:4] SET_COUNT (0-5), [8:7] SIDE_COUNT (0-3), [9] SIDE_PINDIR, [10] DIFF, [15:12] JMP_PIN |
 | 0x4 | SHIFT    | 0      | [0] IN_RIGHT, [1] OUT_RIGHT, [2] AUTOPUSH, [3] AUTOPULL, [7:4] PUSH_THRESH, [11:8] PULL_THRESH, [12] CRC_IN, [13] CRC_OUT |
 | 0x5 | TIMEOUT  | 0xFFFF | wait timeout, in ticks |
-| 0x6 | TRAP     | 0      | [4:0] trap address |
+| 0x6 | TRAP     | 0      | [5:0] trap address |
 | 0x7 | CRCPOLY  | 0      | |
 | 0x8 | CRC      | 0      | read/write |
 | 0x9 | X        | 0      | read/write |
 | 0xA | Y        | 0      | read/write |
 | 0xB | ISR      | -      | read only |
 | 0xC | OSR      | -      | read only |
-| 0xD | STATUS   | -      | [4:0] PC, [7:5] TX level, [10:8] RX level, [11] STALLED, [12] TIMED_OUT, [13] RX_OVERFLOW, [14] TX_OVERFLOW. Write 1 to bits 12-14 to clear them. |
+| 0xD | STATUS   | -      | [4:0] PC bits 4-0, [15] PC bit 5, [7:5] TX level, [10:8] RX level, [11] STALLED, [12] TIMED_OUT, [13] RX_OVERFLOW, [14] TX_OVERFLOW. Write 1 to bits 12-14 to clear them. |
 | 0xE | TIME     | 0      | read only |
 | 0xF | FIFO     | -      | write: push to the TX FIFO (dropped and `TX_OVERFLOW` set when full). Read: pop the RX FIFO (0 when empty). |
 

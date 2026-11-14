@@ -58,8 +58,8 @@ def test_selftest_passes_on_model():
 def test_check_and_burst():
     chip = pemu_board.Pemu(ModelLink())
     chip.check()
-    chip.write(0, 1, 2, 3)
-    assert chip.read(0, 3) == [1, 2, 3]
+    chip.write(0x40, 1, 2, 3)          # CLKDIV, PROG, PINMAP: a burst
+    assert chip.read(0x40, 3) == [1, 2, 3]
 
 
 def test_bad_id_raises():

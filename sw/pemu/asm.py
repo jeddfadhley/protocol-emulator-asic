@@ -27,7 +27,8 @@ OUT_DSTS = {"pins": 0, "x": 1, "y": 2, "null": 3, "pindirs": 4, "pc": 5, "isr": 
 MOV_DSTS = {"pins": 0, "x": 1, "y": 2, "crc": 3, "pindirs": 4, "pc": 5, "isr": 6, "osr": 7}
 SET_DSTS = {"pins": 0, "x": 1, "y": 2, "pindirs": 4}
 
-OP_JMP, OP_WAIT, OP_IN, OP_OUT, OP_PUSHPULL, OP_MOV, OP_SET = 0, 1, 2, 3, 4, 5, 7
+OP_JMP, OP_WAIT, OP_IN, OP_OUT, OP_PUSHPULL, OP_MOV, OP_JMP_HI, OP_SET = range(8)
+MAX_WORDS = 64  # one engine's instruction memory
 
 
 class AsmError(Exception):
@@ -50,8 +51,11 @@ class Program:
         return len(self.code)
 
     def prog_reg(self, origin):
-        """Value for the engine PROG register when loaded at `origin`."""
-        return (origin & 63) | (self.wrap_bottom << 6) | (self.wrap_top << 11)
+        """Value for the engine PROG register when loaded at `origin`
+        (a multiple of 4)."""
+        if origin % 4:
+            raise ValueError("origin must be a multiple of 4")
+        return (origin >> 2 & 15) | (self.wrap_bottom << 4) | (self.wrap_top << 10)
 
 
 def _num(tok, defines, labels=None):
@@ -128,8 +132,8 @@ def assemble(source, name=None):
         except (AsmError, IndexError) as exc:
             raise AsmError(f"line {lineno}: {exc}") from None
 
-    if len(lines) > 32:
-        raise AsmError(f"program is {len(lines)} instructions; the limit is 32")
+    if len(lines) > MAX_WORDS:
+        raise AsmError(f"program is {len(lines)} instructions; the limit is {MAX_WORDS}")
 
     # Pass 2: encode.
     code = []
@@ -211,9 +215,10 @@ def _operands(mnem, args, rest, defines, labels):
         if cond not in JMP_CONDS:
             raise AsmError(f"unknown jmp condition '{cond}'")
         addr = _num(target, defines, labels)
-        if not 0 <= addr < 32:
+        if not 0 <= addr < MAX_WORDS:
             raise AsmError("jump target out of range")
-        return OP_JMP, (JMP_CONDS[cond] << 5) | addr
+        # The opcode carries the target's top bit: op 6 jumps to 32-63.
+        return (OP_JMP_HI if addr & 32 else OP_JMP), (JMP_CONDS[cond] << 5) | (addr & 31)
 
     if mnem == "wait":
         toks = rest.replace(",", " ").split()
@@ -311,9 +316,9 @@ def disassemble(word, side_count=0):
     delay = sd & ((1 << (5 - side_count)) - 1)
     raw = f".word {word:#06x}"
     n = (word & 15) or 16
-    if op == OP_JMP:
+    if op in (OP_JMP, OP_JMP_HI):
         cond = _JMP_NAMES[(word >> 5) & 7]
-        text = f"jmp {cond + ', ' if cond else ''}{word & 31}"
+        text = f"jmp {cond + ', ' if cond else ''}{(word & 31) | (32 if op == OP_JMP_HI else 0)}"
     elif op == OP_WAIT:
         src = (word >> 5) & 3
         text = f"wait {(word >> 7) & 1} {_WAIT_NAMES[src]} {word & 15}"

@@ -32,15 +32,15 @@ pin outputs, bus read data, event flags and **all architectural state of both
 engines**: PC, delay, X, Y, ISR/OSR and their counts, CRC, timers, FIFO
 levels and sticky flags.
 
-- **Constrained random:** each seed fills instruction memory with random
-  instructions (three opcode mixes: mixed, data-path heavy, control heavy),
+- **Constrained random:** each seed fills the instruction memories with random
+  instructions (the same program in both, or a different one in each) (three opcode mixes: mixed, data-path heavy, control heavy),
   randomises all configuration, toggles input pins and issues random host
   traffic. That traffic includes FIFO pushes and pops, aborted reads, CTRL
   pulses for restart, step and flush, packet RAM reads and writes, and DMA
   transfers in both directions on both channels. The packet RAM contents
   are compared too. Every 16-bit word is a legal
   instruction, so random programs exercise the whole encoding space,
-  reserved encodings included.
+  reserved fields included, and jumps of both opcodes reach all 64 words.
 - **Pads in both clock halves:** the co-simulation compares the pins the
   chip actually drives in the first and the second half of every clock, so
   half-clock (`late`) writes are checked against the model too.
@@ -85,6 +85,7 @@ Each scenario runs twice with identical code:
 | `ws2812` | 24 bits with exact 10-tick periods and 2/7-tick high times |
 | `edge_stamp` | edge timestamps differ by exactly the input pulse widths |
 | `single_step` | debug stepping with PC visible after every tick |
+| `program_memory` | a 64-word program: far and near jumps across the halves, a trap into the upper half, PC bit 5 in STATUS; loading engine 1 leaves engine 0's memory alone; IMEM reads as 0 |
 | `usb_ls_tx` | SETUP, DATA0 (GET_DESCRIPTOR), ACK, stuffed DATA1 at exactly 1.5 Mbit/s |
 | `eth_loopback` | a 10BASE-T frame from engine 0 to engine 1 on-chip, FCS intact |
 | `eth_tx` | pins sampled twice per clock: every half bit exactly 50 ns, preamble, TP_IDL, link pulses |
@@ -204,6 +205,19 @@ the timing repair was only run at the typical corner. The fixes:
   left unset, LibreLane 3.1.0.dev3 fell back to one thread and routing ran
   past CI's 6-hour limit), and the all-corner resizer (`RSZ_CORNERS`) was
   dropped for the same reason.
+- **Wiring, not cells, limits this design.** On the 8x4 slot, the v2 layout
+  ran past CI's 6 hours twice. The log showed why: SG13CMOS5L gives signals
+  only three metal layers (Metal2-4), and the one horizontal layer, Metal3,
+  was asked for 95% of its capacity. Global routing spent 90 minutes and
+  detailed routing four hours resolving the overflow. The biggest wiring
+  load was the memories' read multiplexers: the instruction memory had three
+  64-to-1 read ports (two fetches and the host) and the packet RAM two
+  128-to-1 ports (DMA and host). v3 removes the host's read port from the
+  instruction memory and gives each engine its own 64-word memory with one
+  fetch port, and the packet RAM shares one read port between the DMA and
+  the host (a TX transfer waits a clock when the host reads). In a generic
+  Yosys synthesis the design shrinks from 30,766 to 25,648 cells while the
+  program memory doubles.
 
 ## Bugs found by this process
 

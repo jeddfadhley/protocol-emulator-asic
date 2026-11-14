@@ -5,7 +5,7 @@ in [isa.md](isa.md). Working examples are in [`sw/programs/`](../sw/programs).
 
 ## The model in one paragraph
 
-An engine runs a short program, at most 32 instructions, in a loop. Each
+An engine runs a short program, at most 64 instructions, in a loop. Each
 instruction takes exactly `1 + delay` **ticks**, and a tick is `CLKDIV + 1`
 clocks. You set protocol timing by counting ticks. Data arrives from the host
 through the TX FIFO into the output shift register (OSR), and `OUT` moves bits
@@ -90,7 +90,7 @@ from pemu import assemble_file, EngineConfig, load_writes, config_writes, ctrl
 
 prog = assemble_file("sw/programs/uart_tx.pasm")
 cfg = EngineConfig(clkdiv=53, out_base=12, set_base=12, set_count=1, out_right=True, x=7)
-writes = load_writes(prog, origin=0) + config_writes(0, prog, 0, cfg)
+writes = load_writes(0, prog) + config_writes(0, prog, 0, cfg)
 writes += [(0x66, 1 << 12),                       # PIN_SET: TX idles high
            (0x60, ctrl(enable=1, restart=1))]     # start engine 0
 ```
@@ -130,8 +130,13 @@ bit-banged SPI from MicroPython.
   each sample never drifts, however far apart the two clocks are. Restart
   the wait a fixed number of clocks after each edge to skip transitions you
   don't want (see `eth_rx.pasm`).
-- **Programs are relocatable.** Jump targets are relative to `ORIGIN`, so the
-  same machine code works at any address. The two engines can share code.
+- **Each engine has its own 64-word memory.** `load_writes(engine, prog)`
+  selects it through `IMEM_SEL`; `load_writes("both", prog)` loads the same
+  program into both in one pass (two UARTs, say).
+- **Programs are relocatable.** Jump targets are relative to `ORIGIN` (a
+  multiple of 4), so the same machine code works at any address, and an
+  engine can hold two short programs and switch between them by rewriting
+  `PROG`.
 
 ## Example programs
 

@@ -159,9 +159,9 @@ def test_cli_peek_poke(link):
     assert run(["poke", "0x49", "0xbeef"], link)[0] == 0
     rc, out = run(["peek", "0x49"], link)
     assert rc == 0 and "0x49: 0xbeef" in out
-    assert run(["poke", "0", "1", "2", "3"], link)[0] == 0
-    rc, out = run(["peek", "0", "3"], link)
-    assert out.split() == ["0x00:", "0x0001", "0x01:", "0x0002", "0x02:", "0x0003"]
+    assert run(["poke", "0x40", "1", "2", "3"], link)[0] == 0
+    rc, out = run(["peek", "0x40", "3"], link)
+    assert out.split() == ["0x40:", "0x0001", "0x41:", "0x0002", "0x42:", "0x0003"]
 
 
 def test_cli_uart_runs_firmware(link):

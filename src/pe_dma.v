@@ -8,8 +8,10 @@
 // Two DMA channels between the packet RAM and the engines' FIFOs. Channel c
 // serves engine c: TX moves RAM words into the TX FIFO, RX moves RX FIFO
 // words into the RAM. At most one transfer per clock, channel 0 first. A
-// channel stands aside when the host uses the same FIFO (or, for RX, writes
-// the RAM) in the same clock. See docs/isa.md section 3a.
+// channel stands aside when the host uses the same FIFO, or the RAM in the
+// same direction (an RX transfer when the host writes the RAM, a TX transfer
+// when the host reads it: the RAM has one read port), in the same clock. See
+// docs/isa.md section 3a.
 module pe_dma (
     input  wire        clk,
     input  wire        rst_n,
@@ -26,6 +28,7 @@ module pe_dma (
     input  wire        host_commit0,  // read commit at engine 0's FIFO port
     input  wire        host_commit1,
     input  wire        host_ram_we,   // write to RAM_DATA
+    input  wire        host_ram_re,   // read load at RAM_DATA
 
     // Host writes to the DMA0/DMA1 registers
     input  wire        reg_we0,
@@ -50,9 +53,9 @@ module pe_dma (
   wire       rx1  = dma1[15];
 
   wire ok0 = act0 && (rx0 ? (rx_level0 != 3'd0 && !host_commit0 && !host_ram_we)
-                          : (tx_level0 != 3'd4 && !host_push0));
+                          : (tx_level0 != 3'd4 && !host_push0 && !host_ram_re));
   wire ok1 = act1 && (rx1 ? (rx_level1 != 3'd0 && !host_commit1 && !host_ram_we)
-                          : (tx_level1 != 3'd4 && !host_push1));
+                          : (tx_level1 != 3'd4 && !host_push1 && !host_ram_re));
 
   wire go0 = ok0;
   wire go1 = ok1 && !ok0;
@@ -100,6 +103,7 @@ module pe_dma (
     assert (!(push0 && host_push0) && !(push1 && host_push1));
     assert (!(pop0 && host_commit0) && !(pop1 && host_commit1));
     assert (!(ram_we && host_ram_we));
+    assert (!((push0 || push1) && host_ram_re));
     // At most one transfer per clock, and only on an active channel
     assert ({1'b0, push0} + push1 + pop0 + pop1 <= 2'd1);
     if (push0 || pop0) assert (act0 && !sel1);

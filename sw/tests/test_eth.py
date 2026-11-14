@@ -58,7 +58,7 @@ async def _receive(phase, ppm, jitter, seed):
     frame = eth.with_fcs(eth.udp_frame(bytes((seed * 7 + i) & 255 for i in range(40))))
     _, x = eth.rx_words(100)
     src = EthSource([frame], gap_ns=5000, phase_ns=phase, ppm=ppm, jitter_ns=jitter, seed=seed)
-    await b.setup(1, S.program("eth_rx"), 16, S.eth_rx_cfg(S.ETH_RD, 100))
+    await b.setup(1, S.program("eth_rx"), 0, S.eth_rx_cfg(S.ETH_RD, 100))
     await b.dma(1, 0, 128, rx=True)
     await b.start(2)
     b.ui(src, 0)

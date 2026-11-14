@@ -9,7 +9,7 @@ import random
 
 import cocotb
 
-from pemu.model import A_FLAGS, A_ID, A_PIN_OE, A_PIN_OUT, CHIP_ID
+from pemu.model import A_FLAGS, A_ID, A_PIN_OE, A_PIN_OUT, A_RAM_ADDR, A_RAM_DATA, CHIP_ID
 from pemu.scenarios import SCENARIOS
 from rtl_bench import RtlBench
 
@@ -32,14 +32,16 @@ async def test_reset_state(dut):
 
 @cocotb.test()
 async def test_spi_registers(dut):
-    """Register write/read, burst auto-increment, and instruction memory."""
+    """Register write/read, burst auto-increment, and a streaming port burst."""
     b = await bench(dut)
     await b.write(A_FLAGS, 0xA5)
     assert await b.read(A_FLAGS) == 0xA5
     rng = random.Random(7)
     words = [rng.randrange(1 << 16) for _ in range(64)]
-    await b.write_burst(0, words)
-    assert await b.read_burst(0, 64) == words
+    await b.write(A_RAM_ADDR, 0)
+    await b.write_burst(A_RAM_DATA, words)        # packet RAM: the port stays put
+    await b.write(A_RAM_ADDR, 0)
+    assert await b.read_burst(A_RAM_DATA, 64) == words
     # A burst crosses from PIN_OUT into PIN_OE
     await b.write_burst(A_PIN_OUT, [0x1234, 0x00F0])
     assert await b.read_burst(A_PIN_OUT, 2) == [0x1234, 0x00F0]

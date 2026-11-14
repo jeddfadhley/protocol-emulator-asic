@@ -13,9 +13,9 @@
 
   "//": "PL_TARGET_DENSITY_PCT - You can increase this if Global Placement fails with error GPL-0302.",
   "//": "Users have reported that values up to 80 worked well for them.",
-  "//": "PEMU: 53, just above the 49% the cells fill in the 8x4 area. At 60 the placer",
-  "//": "packed the cells into a congested clump and routing ran past CI's 6 hours.",
-  "PL_TARGET_DENSITY_PCT": 53,
+  "//": "PEMU: a little above the ~50% the cells fill in the 8x4 area, so they spread",
+  "//": "evenly. Routing, not placement, is what limits this design (docs/verification.md 7).",
+  "PL_TARGET_DENSITY_PCT": 55,
 
   "//": "CLOCK_PERIOD - Increase this in case you are getting setup time violations.",
   "//": "The value is in nanoseconds, so 20ns == 50MHz.",
