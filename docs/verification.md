@@ -173,21 +173,25 @@ feature programs.
 
 ## 6. Physical implementation
 
-The Tiny Tapeout flow (LibreLane/OpenROAD on IHP SG13CMOS5L) hardens the
-design in a 6x4-tile slot, and CI re-runs the chip tests on the routed
-gate-level netlist. Results:
+The Tiny Tapeout flow (LibreLane 3.1 / OpenROAD on IHP SG13CMOS5L) hardens
+the design in an 8x4-tile slot, and CI re-runs the chip tests on the routed
+gate-level netlist. Results for v3 (commit `5eb11d5`, CI run 43934099304):
 
 | Metric | Value |
 |--------|-------|
-| DRC, LVS, antenna, TT precheck | clean |
+| DRC, LVS, antenna, TT precheck | clean (0 errors) |
 | Gate-level chip tests | pass |
-| Standard cells (placed) | 42,168 cells, 0.59 mm² (66% of the 6x4 core) |
-| Flip-flops | 4,138 (half of them the packet RAM) |
-| Setup slack at 50 MHz, typical (1.20 V, 25 °C) | +2.72 ns |
-| Setup slack at 50 MHz, fast (1.32 V, -40 °C) | +3.97 ns |
-| Setup slack at 50 MHz, slow (1.08 V, 125 °C) | -7.86 ns, so about 36 MHz worst case |
-| Hold slack (all corners) | +0.12 ns |
-| Estimated power | 21 mW |
+| Standard cells (placed, excluding fill) | 29,260 cells, 0.46 mm² (38% of the 1.21 mm² core) |
+| Storage | 4,096 memory latches and 1,629 flip-flops |
+| Setup slack at 50 MHz, typical (1.20 V, 25 °C) | +1.84 ns |
+| Setup slack at 50 MHz, fast (1.32 V, -40 °C) | +3.33 ns |
+| Setup slack at 50 MHz, slow (1.08 V, 125 °C) | -0.79 ns, so about 48 MHz worst case |
+| Hold slack (worst corner, fast) | +0.10 ns |
+| Estimated power | 10 mW |
+| Layout run time on CI | 1 h 45 min (the limit is 6 h) |
+
+For comparison, v2 in the smaller 6x4 slot used 0.59 mm² of cells and 21 mW,
+and reached +2.72 ns typical but -7.86 ns (about 36 MHz) at the slow corner.
 
 The flow optimises timing at the typical corner, as is usual for Tiny
 Tapeout, so 50 MHz is the design's typical rating. All protocol firmware
@@ -265,10 +269,11 @@ the timing repair was only run at the typical corner. The fixes:
   the DMA's choice of channel, the address and its decode had half a clock.
   That write request is now registered first and stored a clock later, and
   until then a read of that word is answered from the register, so reads
-  still see a write on the next clock. Without it the slow corner is set by
-  the engines (-2.37 ns, about 45 MHz). The flow now signs off setup timing
+  still see a write on the next clock. The flow now signs off setup timing
   at the typical corner again (`TIMING_VIOLATION_CORNERS` in
-  `src/config.json`); hold is checked at all corners.
+  `src/config.json`); hold is checked at all corners. With both changes
+  the layout passed in 1 h 45 min, and the slow corner came out at
+  -0.79 ns (about 48 MHz), the closest it has been (section 6).
 
 ## Bugs found by this process
 
