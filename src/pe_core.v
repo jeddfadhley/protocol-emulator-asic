@@ -40,9 +40,8 @@ module pe_core (
   // The host writes them through the 0x00-0x3F window (IMEM_SEL picks which)
   // and cannot read them back: a host read port would be a third
   // 64-to-1 multiplexer, and on this process wiring is the scarce resource.
-  reg [15:0] imem0[0:63];
-  reg [15:0] imem1[0:63];
-  reg [15:0] pram[0:127];  // packet RAM
+  // The memories themselves are at the end of this module.
+  wire [15:0] instr0, instr1;  // each engine's fetched instruction
   reg [6:0]  ram_addr;     // host port address
   reg [2:0]  ctrl;  // [1:0] engine enables, [2] loopback
   reg [1:0]  imem_sel;  // which memories a host write reaches: [0] engine 0, [1] engine 1
@@ -106,7 +105,7 @@ module pe_core (
   // The packet RAM has one read port. A host read of RAM_DATA takes it for
   // that clock and a TX transfer stands aside (pe_dma, host_ram_re).
   wire        host_ram_re  = bus_re && bus_addr == A_RAM_DATA;
-  wire [15:0] pram_rdata   = pram[host_ram_re ? ram_addr : dma_addr];
+  wire [15:0] pram_rdata;
   wire [15:0] dma_rdata    = pram_rdata;
 
   pe_dma u_dma (
@@ -151,7 +150,7 @@ module pe_core (
       .wdata     (bus_wdata),
       .rdata     (rdata0),
       .fetch_addr(fetch0),
-      .instr     (imem0[fetch0]),
+      .instr     (instr0),
       .pin_in    (pin_in),
       .flags     (flags),
       .out_mask  (om0),
@@ -184,7 +183,7 @@ module pe_core (
       .wdata     (bus_wdata),
       .rdata     (rdata1),
       .fetch_addr(fetch1),
-      .instr     (imem1[fetch1]),
+      .instr     (instr1),
       .pin_in    (pin_in),
       .flags     (flags),
       .out_mask  (om1),
@@ -263,11 +262,22 @@ module pe_core (
 
   // Memories. The instruction memories are written by the host; the packet
   // RAM by the host port or an RX transfer (pe_dma never does both in the
-  // same clock). On the chip both are flip-flops cleared by reset. FPGA
-  // builds define PEMU_LUTRAM: no reset, so they map to LUT RAM, and they
-  // start at zero from the bitstream.
-  wire imem_we = bus_we && !bus_addr[6];
+  // same clock). Each memory has one read port: an engine's fetch, or for
+  // the packet RAM the host (a RAM_DATA read) or else the DMA.
+  //
+  // On the chip they are latches (pe_ram below), cleared by reset. FPGA
+  // builds define PEMU_LUTRAM: plain arrays with no reset, so they map to LUT
+  // RAM, and they start at zero from the bitstream. Both behave the same
+  // clock by clock: a write in one clock is seen by reads in the next.
+  wire        imem_we   = bus_we && !bus_addr[6];
+  wire        pram_we   = host_ram_we || dma_ram_we;
+  wire [6:0]  pram_wa   = host_ram_we ? ram_addr : dma_addr;
+  wire [15:0] pram_wd   = host_ram_we ? bus_wdata : dma_sel1 ? rxw1 : rxw0;
+  wire [6:0]  pram_ra   = host_ram_re ? ram_addr : dma_addr;
 `ifdef PEMU_LUTRAM
+  reg [15:0] imem0[0:63];
+  reg [15:0] imem1[0:63];
+  reg [15:0] pram[0:127];
   integer k;
   initial begin
     for (k = 0; k < 64; k = k + 1) imem0[k] = 16'h0000;
@@ -281,34 +291,21 @@ module pe_core (
     if (rst_n && imem_we && imem_sel[1]) imem1[bus_addr[5:0]] <= bus_wdata;
   end
   always @(posedge clk) begin
-    if (rst_n && host_ram_we) pram[ram_addr] <= bus_wdata;
-    else if (rst_n && dma_ram_we) pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;
+    if (rst_n && pram_we) pram[pram_wa] <= pram_wd;
   end
+  assign instr0     = imem0[fetch0];
+  assign instr1     = imem1[fetch1];
+  assign pram_rdata = pram[pram_ra];
 `else
-  integer ki, kj, kp;  // one loop variable per always block (Yosys check)
-  always @(posedge clk) begin
-    if (!rst_n) begin
-      for (ki = 0; ki < 64; ki = ki + 1) imem0[ki] <= 16'h0000;
-    end else if (imem_we && imem_sel[0]) begin
-      imem0[bus_addr[5:0]] <= bus_wdata;
-    end
-  end
-  always @(posedge clk) begin
-    if (!rst_n) begin
-      for (kj = 0; kj < 64; kj = kj + 1) imem1[kj] <= 16'h0000;
-    end else if (imem_we && imem_sel[1]) begin
-      imem1[bus_addr[5:0]] <= bus_wdata;
-    end
-  end
-  always @(posedge clk) begin
-    if (!rst_n) begin
-      for (kp = 0; kp < 128; kp = kp + 1) pram[kp] <= 16'h0000;
-    end else if (host_ram_we) begin
-      pram[ram_addr] <= bus_wdata;
-    end else if (dma_ram_we) begin
-      pram[dma_addr] <= dma_sel1 ? rxw1 : rxw0;
-    end
-  end
+  pe_ram #(.AW(6)) u_imem0 (
+      .clk(clk), .rst_n(rst_n), .we(imem_we && imem_sel[0]),
+      .waddr(bus_addr[5:0]), .wdata(bus_wdata), .raddr(fetch0), .rdata(instr0));
+  pe_ram #(.AW(6)) u_imem1 (
+      .clk(clk), .rst_n(rst_n), .we(imem_we && imem_sel[1]),
+      .waddr(bus_addr[5:0]), .wdata(bus_wdata), .raddr(fetch1), .rdata(instr1));
+  pe_ram #(.AW(7)) u_pram (
+      .clk(clk), .rst_n(rst_n), .we(pram_we),
+      .waddr(pram_wa), .wdata(pram_wd), .raddr(pram_ra), .rdata(pram_rdata));
 `endif
 
   // ---------------------------------------------------------------------
@@ -339,4 +336,67 @@ module pe_core (
     end
   end
 
+endmodule
+
+
+// Latch memory: 2^AW words of 16 bits with one write port and one read port.
+//
+// A latch is about half the size of a flip-flop and needs no logic to hold
+// its value, so this cuts the memories' share of the chip by more than a
+// third, and with it the wiring that made the layout too slow to route.
+//
+// A write requested in clock t (we, waddr, wdata come from rising-edge
+// registers and are steady through the clock):
+//   - the falling edge in clock t sets the word's flag sel_n;
+//   - the rising edge that ends clock t copies it to sel_p and captures the
+//     data in wd_p;
+//   - the word's latches are open while sel_p AND sel_n: the first (high)
+//     half of clock t+1. They close at its falling edge, half a clock before
+//     wd_p can change;
+//   - reads in clock t+1 see the new value, as with flip-flops.
+// The gate is an AND of two flip-flop outputs that change half a clock
+// apart, so it cannot glitch, and no clock passes through logic. This is
+// the scheme of Michael Bell's TT06 latch RAM, with a flag pair per word so
+// that writes may come in back-to-back clocks (the RX DMA does that).
+module pe_ram #(
+    parameter AW = 6
+) (
+    input  wire          clk,
+    input  wire          rst_n,  // clears every word while low
+    input  wire          we,
+    input  wire [AW-1:0] waddr,
+    input  wire [15:0]   wdata,
+    input  wire [AW-1:0] raddr,
+    output wire [15:0]   rdata
+);
+  localparam WORDS = 1 << AW;
+
+  reg [WORDS-1:0] sel_n, sel_p;
+  reg [15:0]      wd_p;
+  always @(negedge clk) begin
+    sel_n <= (we && rst_n) ? {{(WORDS - 1) {1'b0}}, 1'b1} << waddr : {WORDS{1'b0}};
+  end
+  always @(posedge clk) begin
+    sel_p <= sel_n;
+    wd_p  <= wdata;
+  end
+
+  wire [16*WORDS-1:0] words;
+  genvar w;
+  generate
+    for (w = 0; w < WORDS; w = w + 1) begin : word
+      wire       open_w = sel_p[w] && sel_n[w];
+      reg [15:0] q;
+      // A latch on purpose (Verilog-2005 has no always_latch to say so).
+      /* verilator lint_off LATCH */
+      always @(*) begin
+        if (!rst_n) q = 16'h0000;
+        else if (open_w) q = wd_p;
+      end
+      /* verilator lint_on LATCH */
+      assign words[16*w+:16] = q;
+    end
+  endgenerate
+
+  assign rdata = words[16*raddr+:16];
 endmodule

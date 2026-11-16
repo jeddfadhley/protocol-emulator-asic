@@ -15,7 +15,7 @@ and every layer runs in CI on each push (`.github/workflows/test.yaml`).
  (model)                       │      RTL driven through its real SPI pins
                                │
                      formal proofs (BMC + k-induction)
-                     mutation testing (45 planted bugs)
+                     mutation testing (47 planted bugs)
                      gate-level re-run of the chip tests (CI)
 ```
 
@@ -145,14 +145,24 @@ assumed. It is assumed only when the FIFO is checked on its own.
 ## 5. Mutation testing (`test/mutate.py`)
 
 Mutation testing asks whether the tests would notice a bug. The script
-plants 45 realistic bugs, one at a time, and reruns the relevant tests. The
+plants 47 realistic bugs, one at a time, and reruns the relevant tests. The
 bugs include an off-by-one in a threshold, a missing decrement, a wrong CRC
 tap, a missing synchronizer stage, broken engine priority, and an SPI pop on
 the wrong clock edge, plus 12 for v2: DMA priority and address bugs, RAM
 port bugs, a differential pin that is not inverted, an any-edge wait
 compared with the wrong level, and 6 for the timing work (late pins that are
-not late, a mis-wired STEP pulse, a ring buffer that runs out...). **All 45
+not late, a mis-wired STEP pulse, a ring buffer that runs out...), and two
+for v3 (a TX transfer that takes the packet RAM's read port while the host
+is reading, and a latch-memory word that opens half a clock early). **All 47
 are caught.**
+
+One latch-memory bug cannot be caught this way: closing a word on the
+rising edge instead of the falling edge. In a zero-delay simulation the
+latch closes and the next data arrives at the same instant and the
+simulator resolves it correctly, so every test passes. On silicon it would
+be a race. The design avoids it by construction (the latches close half a
+clock before the data can change), and the layout flow's timing checks
+cover the rest.
 
 The first run caught 24. The survivor, a PUSH `iffull` off by one, led to the
 directed threshold sweep in section 2. For v2, the first run caught 10 of
@@ -218,6 +228,33 @@ the timing repair was only run at the typical corner. The fixes:
   the host (a TX transfer waits a clock when the host reads). In a generic
   Yosys synthesis the design shrinks from 30,766 to 25,648 cells while the
   program memory doubles.
+- **v3 still ran out of time, by about half an hour.** Metal3 demand fell
+  from 95% to 85%, and detailed routing did finish with zero violations, but
+  it took 5 h 22 min (53 rounds, the last 30 spent on fewer than 100
+  violations), and the six hours ran out in the antenna-repair pass after
+  it. Synthesis with the real cell library showed where the area was: of
+  476,000 µm² of cells, 253,000 were flip-flops, and 4,096 of the 5,157
+  flip-flops were memory bits, each with its own hold-value logic.
+- **So the memories became latches** (`pe_ram` in `src/pe_core.v`). A latch
+  with reset (`dlhrq_1`, 27 µm²) is about half a flip-flop (`dfrbpq_1`,
+  49 µm²) and needs no hold logic, because it only opens when written. Each
+  word's latches open while two flags are set: one set on the falling edge
+  after the write request, the other its copy on the next rising edge. So a
+  word is open for the first half of the clock after the request and closes
+  half a clock before its data register can change. The gate is an AND of
+  two flip-flops that change half a clock apart, so it cannot glitch, and
+  no clock passes through logic (the method of Michael Bell's TT06 latch
+  RAM, with a flag pair per word so the RX DMA can write in back-to-back
+  clocks). Reads see a write on the next clock, exactly as before, so the
+  spec, the model and every test are unchanged. The cell count falls from
+  27,800 to 20,400 and the area from 476,000 to 347,000 µm² (IHP cell
+  library, local Yosys). The FPGA build keeps plain arrays, which map to
+  LUT RAM.
+- The co-simulation needed one change for this: it used to drive the bus
+  exactly on the falling edge, the instant the latch memories capture a
+  request, and the simulator then saw the old request. It now drives the
+  bus 1 ns earlier. On the chip the bus comes from rising-edge registers and
+  has been steady for half a clock by then.
 
 ## Bugs found by this process
 
@@ -247,7 +284,7 @@ cd sw && python -m pytest -q tests          # model, assembler, USB, board drive
 cd test && make TB=core                      # lockstep co-simulation
 cd test && make                              # chip-level scenarios over SPI
 formal/run.sh                                # formal proofs (needs yices)
-python3 test/mutate.py                       # mutation testing (~10 minutes)
+python3 test/mutate.py                       # mutation testing (~40 minutes)
 ```
 
 Note: cocotb's Makefile cannot handle a space in the project path. Run from a

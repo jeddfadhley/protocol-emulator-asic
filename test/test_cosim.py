@@ -12,7 +12,7 @@ from collections import Counter
 
 import cocotb
 from cocotb.clock import Clock
-from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge
+from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, Timer
 
 from pemu.model import RAM_WORDS, Core, dma_word, engine_base
 
@@ -133,6 +133,14 @@ async def run_seed(dut, seed, coverage):
     await run_lockstep(dut, rng, script, CYCLES, coverage, f"seed {seed}")
 
 
+def ram_word(dut, k):
+    """Packet RAM word k: an array in FPGA builds, latches (pe_ram) on the chip."""
+    core = dut.dut
+    if hasattr(core, "u_pram"):
+        return int(core.u_pram.word[k].q.value)
+    return int(core.pram[k].value)
+
+
 async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, quiet_bus=False):
     """Apply `script` (register writes), then random traffic, comparing the
     RTL with the model every clock. `toggle` = (pin mask, probability) makes
@@ -147,7 +155,10 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
     dut.bus_wdata.value = 0
     dut.pins_ext.value = 0
     await ClockCycles(dut.clk, 2)
-    await FallingEdge(dut.clk)
+    # Inputs change 1 ns before each falling edge, not on it. On the chip the
+    # bus comes from rising-edge registers and is steady by then, and the
+    # latch memories (pe_ram) capture write requests on the falling edge.
+    await Timer(9, unit="ns")
     dut.rst_n.value = 1
 
     pins = rng.randrange(1 << 16)
@@ -171,6 +182,7 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
         dut.bus_addr.value = addr
         dut.bus_wdata.value = wdata
         dut.pins_ext.value = pins
+        await FallingEdge(dut.clk)
         await cocotb.triggers.ReadOnly()
 
         # Compare the state the clock edge will act on
@@ -189,7 +201,7 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
         assert sig(dut, "dut.dma0") == model.dma[0], f"{ctx}: dma0"
         assert sig(dut, "dut.dma1") == model.dma[1], f"{ctx}: dma1"
         k = cyc % RAM_WORDS
-        assert int(dut.dut.pram[k].value) == model.ram[k], f"{ctx}: pram[{k}]"
+        assert ram_word(dut, k) == model.ram[k], f"{ctx}: pram[{k}]"
         for i, e in enumerate(model.engines):
             rtl = getattr(dut.dut, f"u_e{i}")
             for attr, name in ENGINE_FIELDS:
@@ -221,13 +233,13 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
         await cocotb.triggers.ReadOnly()
         assert int(dut.pin_pad.value) == model.pad_early(), f"{ctx}: pad (first half)"
         coverage["late_pins"] += bool(model.pin_late & (model.pin_out ^ model.pin_prev))
-        await FallingEdge(dut.clk)
+        await Timer(9, unit="ns")
 
     for e in model.engines:
         coverage["rx_ovf"] += e.rx_ovf
         coverage["tx_ovf"] += e.tx_ovf
     for k in range(RAM_WORDS):
-        assert int(dut.dut.pram[k].value) == model.ram[k], f"{name} end: pram[{k}]"
+        assert ram_word(dut, k) == model.ram[k], f"{name} end: pram[{k}]"
 
 
 @cocotb.test()
