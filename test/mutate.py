@@ -86,6 +86,8 @@ MUTATIONS = [
      "RX DMA stores the wrong engine's word"),
     ("pe_core.v", "wire       open_w = sel_p[w] && sel_n[w];", "wire       open_w = sel_n[w];",
      "latch memory opens half a clock early, before the data arrives"),
+    ("pe_core.v", "assign pram_rdata = (pq_we && pq_wa == pram_ra) ? pq_wd : pram_lat;",
+     "assign pram_rdata = pram_lat;", "packet RAM read misses a write still waiting to be stored"),
     ("pe_spi.v", " || bus_addr == 7'h69;", ";", "SPI bursts walk off RAM_DATA"),
     # timing work: half-clock pins, registered CTRL pulses, precomputed tick
     ("pe_core.v", "assign pin_pad = (pin_late & pin_neg) | (~pin_late & pin_out);",

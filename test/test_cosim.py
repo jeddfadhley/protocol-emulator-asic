@@ -134,9 +134,12 @@ async def run_seed(dut, seed, coverage):
 
 
 def ram_word(dut, k):
-    """Packet RAM word k: an array in FPGA builds, latches (pe_ram) on the chip."""
+    """Packet RAM word k: an array in FPGA builds, latches (pe_ram) on the chip.
+    On the chip a write waits a clock in pq_* before reaching the latches."""
     core = dut.dut
     if hasattr(core, "u_pram"):
+        if int(core.pq_we.value) and int(core.pq_wa.value) == k:
+            return int(core.pq_wd.value)
         return int(core.u_pram.word[k].q.value)
     return int(core.pram[k].value)
 

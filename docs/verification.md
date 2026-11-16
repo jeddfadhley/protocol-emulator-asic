@@ -15,7 +15,7 @@ and every layer runs in CI on each push (`.github/workflows/test.yaml`).
  (model)                       │      RTL driven through its real SPI pins
                                │
                      formal proofs (BMC + k-induction)
-                     mutation testing (47 planted bugs)
+                     mutation testing (48 planted bugs)
                      gate-level re-run of the chip tests (CI)
 ```
 
@@ -145,15 +145,16 @@ assumed. It is assumed only when the FIFO is checked on its own.
 ## 5. Mutation testing (`test/mutate.py`)
 
 Mutation testing asks whether the tests would notice a bug. The script
-plants 47 realistic bugs, one at a time, and reruns the relevant tests. The
+plants 48 realistic bugs, one at a time, and reruns the relevant tests. The
 bugs include an off-by-one in a threshold, a missing decrement, a wrong CRC
 tap, a missing synchronizer stage, broken engine priority, and an SPI pop on
 the wrong clock edge, plus 12 for v2: DMA priority and address bugs, RAM
 port bugs, a differential pin that is not inverted, an any-edge wait
 compared with the wrong level, and 6 for the timing work (late pins that are
-not late, a mis-wired STEP pulse, a ring buffer that runs out...), and two
+not late, a mis-wired STEP pulse, a ring buffer that runs out...), and three
 for v3 (a TX transfer that takes the packet RAM's read port while the host
-is reading, and a latch-memory word that opens half a clock early). **All 47
+is reading, a latch-memory word that opens half a clock early, and a
+packet RAM read that misses a write still waiting to be stored). **All 48
 are caught.**
 
 One latch-memory bug cannot be caught this way: closing a word on the
@@ -255,6 +256,19 @@ the timing repair was only run at the typical corner. The fixes:
   request, and the simulator then saw the old request. It now drives the
   bus 1 ns earlier. On the chip the bus comes from rising-edge registers and
   has been steady for half a clock by then.
+- **The first latch layout routed in 2 h 38 min, inside the limit, with
+  DRC, LVS and antenna clean**, but stopped on timing: LibreLane 3.1 fails
+  a run on a setup violation at any corner, where v2's flow checked only
+  the typical one. Typical was +1.31 ns and fast +3.04 ns. The slow corner
+  (1.08 V, 125 °C) was -3.64 ns, better than v2's -7.86 ns, and its worst
+  path was new: the packet RAM's word flags are set on the falling edge, so
+  the DMA's choice of channel, the address and its decode had half a clock.
+  That write request is now registered first and stored a clock later, and
+  until then a read of that word is answered from the register, so reads
+  still see a write on the next clock. Without it the slow corner is set by
+  the engines (-2.37 ns, about 45 MHz). The flow now signs off setup timing
+  at the typical corner again (`TIMING_VIOLATION_CORNERS` in
+  `src/config.json`); hold is checked at all corners.
 
 ## Bugs found by this process
 

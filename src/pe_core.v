@@ -303,9 +303,24 @@ module pe_core (
   pe_ram #(.AW(6)) u_imem1 (
       .clk(clk), .rst_n(rst_n), .we(imem_we && imem_sel[1]),
       .waddr(bus_addr[5:0]), .wdata(bus_wdata), .raddr(fetch1), .rdata(instr1));
+  // The packet RAM's write request depends on the DMA's choice of channel,
+  // which is too slow for the half clock pe_ram allows (-3.6 ns at the slow
+  // corner). So the request is registered first, and stored a clock later.
+  // Until then a read of that word is answered from the register, so reads
+  // still see a write on the next clock.
+  reg        pq_we;
+  reg [6:0]  pq_wa;
+  reg [15:0] pq_wd;
+  wire [15:0] pram_lat;
+  always @(posedge clk) begin
+    pq_we <= pram_we && rst_n;
+    pq_wa <= pram_wa;
+    pq_wd <= pram_wd;
+  end
   pe_ram #(.AW(7)) u_pram (
-      .clk(clk), .rst_n(rst_n), .we(pram_we),
-      .waddr(pram_wa), .wdata(pram_wd), .raddr(pram_ra), .rdata(pram_rdata));
+      .clk(clk), .rst_n(rst_n), .we(pq_we),
+      .waddr(pq_wa), .wdata(pq_wd), .raddr(pram_ra), .rdata(pram_lat));
+  assign pram_rdata = (pq_we && pq_wa == pram_ra) ? pq_wd : pram_lat;
 `endif
 
   // ---------------------------------------------------------------------
