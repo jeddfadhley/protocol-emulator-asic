@@ -65,6 +65,9 @@ jobs:
 
       - name: Install OSS CAD Suite (Yosys, yosys-smtbmc, Yices)
         uses: YosysHQ/setup-oss-cad-suite@v3
+        with:
+          # Authenticated, so shared runners don't hit the anonymous API rate limit
+          github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Formal proofs (BMC + k-induction)
         run: DEPTH=16 formal/run.sh
