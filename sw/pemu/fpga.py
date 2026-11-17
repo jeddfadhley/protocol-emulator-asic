@@ -193,7 +193,8 @@ def cmd_check(args, out):
     link = args.open_link()
     chip = pemu_board.Pemu(link)
     chip.check()
-    print(f"PEMU found: chip ID {chip.read(pemu_board.A_ID):#06x}", file=out)
+    print(f"PEMU found: chip ID {chip.read(pemu_board.A_ID):#06x}, "
+          f"version {chip.read(pemu_board.A_VERSION)}", file=out)
     return 0
 
 

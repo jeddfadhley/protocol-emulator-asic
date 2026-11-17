@@ -99,7 +99,8 @@ cd path/to/repository/sw
 python3 -m pemu.fpga check
 ```
 
-You should see `PEMU found: chip ID 0x5045`. Then run the self-test:
+You should see `PEMU found: chip ID 0x5045, version 3` (an older bitstream
+shows a lower version). Then run the self-test:
 
 ```bash
 python3 -m pemu.fpga selftest
