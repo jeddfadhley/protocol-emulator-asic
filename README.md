@@ -15,8 +15,9 @@ firmware speak 10BASE-T, with no Ethernet hardware on the chip
 Digilent Basys 3 FPGA board today ([docs/fpga.md](docs/fpga.md)).
 
 Built for the [Jane Street protocol emulator ASIC competition](https://blog.janestreet.com/protocol-emulator-asic-competition/)
-on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in a
-8x4-tile allocation.
+on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in an
+8x4-tile allocation. **Start with the [write-up](docs/writeup.md)**; how AI
+was used is in [docs/ai-usage.md](docs/ai-usage.md).
 
 ## Highlights
 
@@ -73,12 +74,13 @@ at robust protocols and at being verifiable:
         │ SPI: CS_N/SCK/MOSI on ui_in[6:4], MISO on uo_out[7]
   ┌─────▼──────┐  register bus  ┌──────────────────────────────────────────┐
   │  pe_spi    ├───────────────►│ pe_core                                  │
-  └────────────┘                │  instruction memory (2 x 64 x 16)        │
+  └────────────┘                │  program memory 64x16   program memory   │
                                 │  ┌───────────────┐   ┌───────────────┐   │
                                 │  │ pe_engine 0   │   │ pe_engine 1   │   │
                                 │  │ PC X Y ISR OSR│   │ PC X Y ISR OSR│   │
                                 │  │ CRC TIME FIFOs│   │ CRC TIME FIFOs│   │
                                 │  └──────┬────────┘   └──────┬────────┘   │
+                                │  packet RAM 128x16, one DMA per engine   │
                                 │      pin registers, event flags,         │
                                 │      synchronizers, loopback             │
                                 └──────────────┬───────────────────────────┘
@@ -87,31 +89,35 @@ at robust protocols and at being verifiable:
 
 ## Documentation
 
+- [docs/writeup.md](docs/writeup.md): the competition write-up, start here
 - [docs/isa.md](docs/isa.md): ISA, timing rules and register map (the spec)
 - [docs/programming.md](docs/programming.md): how to write a protocol
+- [docs/new-protocols.md](docs/new-protocols.md): five protocols added after the hardware freeze
 - [docs/verification.md](docs/verification.md): verification strategy and results
 - [docs/ethernet.md](docs/ethernet.md): 10BASE-T on PEMU: firmware, wiring, measured tolerance
 - [docs/fpga.md](docs/fpga.md): run PEMU on a Basys 3 FPGA board from your laptop
 - [docs/info.md](docs/info.md): Tiny Tapeout datasheet page
-- [docs/fpga.md](docs/fpga.md): running PEMU on a Basys 3 FPGA board
+- [docs/ai-usage.md](docs/ai-usage.md): how AI was used, and how its work was checked
 
 ## Verification at a glance
 
 - **Lockstep co-simulation** of the RTL against an independent Python
   reference model, comparing every architectural register every clock:
   constrained-random programs (the whole 16-bit encoding space) plus a
-  directed sweep of shift-count/threshold boundaries. About 600k compared
+  directed sweep of shift-count/threshold boundaries. About 700k compared
   clocks per CI run.
 - **Protocol scenarios.** The same firmware and device models run on the
   model and on the RTL through its SPI pins, and then on the gate-level
   netlist in CI.
 - **Formal proofs** (BMC + k-induction) of cycle exactness, FIFO safety and
   ordering, trap behaviour, and that nothing moves between ticks.
-- **Mutation testing.** All 43 deliberately planted RTL bugs are caught.
+- **Mutation testing.** All 48 deliberately planted RTL bugs are caught.
 - **Runs on real hardware:** the same RTL on a Basys 3 FPGA passes the
-  UART and Ethernet self-tests and 100/100 Ethernet frames.
+  UART, USB and Ethernet self-tests and 100/100 Ethernet frames (tested
+  with v2; v3's larger program memory has not been on the board yet).
 - **Layout signed off** in Tiny Tapeout CI: DRC, LVS, antenna and precheck
-  clean, with the chip tests re-run on the gate-level netlist.
+  clean, with the chip tests re-run on the gate-level netlist, and again
+  with the layout's real gate delays at all three process corners.
 
 ## Repository layout
 

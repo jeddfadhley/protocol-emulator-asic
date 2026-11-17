@@ -198,6 +198,34 @@ Tapeout, so 50 MHz is the design's typical rating. All protocol firmware
 except the USB demo (which needs 48 MHz for exact 1.5 Mbit/s) runs at any
 clock by recomputing `CLKDIV`.
 
+### Timed gate-level simulation (`test/sdf.mk`)
+
+CI's gate-level test runs the routed netlist with zero delays, so it cannot
+see a race: two signals that change "at the same time" are resolved by the
+simulator's event order. The latch memories close on one clock edge while
+their data changes on the other, so a race there is exactly what we wanted
+to rule out. So all 40 chip tests were also run on the routed netlist with
+the layout's own delays (SDF) loaded into every cell:
+
+| Corner | Clock | Result |
+|---|---|---|
+| typical (1.20 V, 25 °C) | 50 MHz | 40 / 40 pass |
+| fast (1.32 V, -40 °C) | 50 MHz | 40 / 40 pass |
+| slow (1.08 V, 125 °C) | 45 MHz | 40 / 40 pass |
+
+Checks that the setup really applies delays: an output pin changes 2.01 ns
+after the clock edge at the typical corner and 1.32 ns at the fast one (zero
+without delays), and at the slow corner the program-memory test fails when
+the clock is pushed to 8 ns.
+
+What this does not cover: Icarus applies the cells' delays but not the
+wires' (about 0.1 ns each here), and does not run setup and hold checks, and
+the tests only exercise the paths they happen to use. The same test still
+passes at the slow corner with a 14 ns clock, where timing analysis says
+about 21 ns is needed. So this simulation finds races and gross timing
+errors; the speed figures come from the layout flow's timing analysis
+above, which checks every path.
+
 ## 7. Timing closure
 
 The first v1 layout met 50 MHz on typical silicon but not on the slow

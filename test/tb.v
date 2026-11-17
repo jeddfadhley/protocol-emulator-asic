@@ -7,11 +7,14 @@
 module tb ();
 
   // Dump the signals to a FST file. You can view it with gtkwave or surfer.
+  // NO_DUMP turns it off (sdf.mk: long timed gate-level runs).
+`ifndef NO_DUMP
   initial begin
     $dumpfile("tb.fst");
     $dumpvars(0, tb);
     #1;
   end
+`endif
 
   // Wire up the inputs and outputs:
   reg clk;

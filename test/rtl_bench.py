@@ -6,6 +6,8 @@ protocol scenarios in sw/pemu/scenarios.py run unchanged on the RTL and on
 the gate-level netlist.
 """
 
+import os
+
 import cocotb
 from cocotb.clock import Clock
 from cocotb.triggers import ClockCycles, FallingEdge, RisingEdge, Timer
@@ -31,7 +33,10 @@ class RtlBench(HostApi):
         self.wires = 0xFF
 
     async def start_clock(self):
-        cocotb.start_soon(Clock(self.dut.clk, 20, unit="ns").start())
+        # 20 ns (50 MHz) unless PEMU_CLK_NS says otherwise (sdf.mk uses it to
+        # run the slow corner at a clock it meets).
+        period = float(os.environ.get("PEMU_CLK_NS", "20"))
+        cocotb.start_soon(Clock(self.dut.clk, period, unit="ns").start())
         d = self.dut
         d.ena.value = 1
         d.ui_in.value = self.spi_bits
