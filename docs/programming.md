@@ -17,7 +17,7 @@ any other instruction.
 ## Assembler
 
 ```
-python3 -m pemu.asm sw/programs/uart_tx.pasm          # hex words to stdout
+python3 -m pemu.asm programs/uart_tx.pasm             # hex words to stdout
 python3 -m pemu.asm prog.pasm -o prog.hex
 ```
 
@@ -148,7 +148,7 @@ bit-banged SPI from MicroPython.
 | `ws2812.pasm` | sub-microsecond pulse timing |
 | `sd_cmd.pasm` | CRC unit generating SD-card CRC7 on the fly |
 | `edge_stamp.pasm` | edge waits plus TIME capture (logic analyser) |
-| `usb_ls_tx.pasm` | USB low-speed packets at exactly 1.5 Mbit/s |
+| `usb_ls_tx.pasm` | USB low-speed packets at 1.515 Mbit/s (33 clocks per bit at 50 MHz, +1.0%; USB allows ±1.5%) |
 | `eth_tx.pasm`, `eth_rx.pasm` | 10BASE-T Ethernet: Manchester, link pulses, SFD hunt, DMA ([ethernet.md](ethernet.md)) |
 | `usb_ls_rx.pasm` | USB low-speed receiver/sniffer: re-sync on every edge, timeout-driven sampling, ring DMA |
 | `onewire.pasm` | 1-Wire master: open drain, one slot loop for reads and writes |

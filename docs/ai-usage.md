@@ -9,8 +9,8 @@ test, a proof or a CI run has not checked.
 
 **The AI** was Claude (Anthropic), working through Claude Code, a command-line
 tool that lets it read and edit files, run simulations and drive git and
-GitHub. 30 of the 31 commits carry its `Co-Authored-By: Claude Opus 5.5`
-trailer; the other is the Tiny Tapeout template setup. Claude wrote:
+GitHub. Every commit except one merge carries its `Co-Authored-By: Claude
+Opus 5.5` trailer. Claude wrote:
 
 - the RTL (`src/`), the instruction set and its spec (`docs/isa.md`);
 - the Python reference model, assembler, device models and protocol
@@ -63,8 +63,8 @@ result in these documents comes from a tool, not from the AI's say-so.
   and the numbers in [verification.md](verification.md) are copied from CI
   reports, with the run ID.
 - **Real hardware.** The same RTL runs on a Basys 3 FPGA board, where the
-  owner ran the UART and Ethernet self-tests and 100 out of 100 Ethernet
-  frames got through.
+  owner ran the UART, USB and Ethernet self-tests and 100 out of 100
+  Ethernet frames got through.
 
 ## Where the AI was wrong, and what caught it
 

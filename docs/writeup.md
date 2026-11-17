@@ -28,7 +28,8 @@ just tested. Around the engines:
 - **Wait timeouts with a trap.** `wait 1 pin 1 timeout` jumps to a handler if
   the line never moves. A hung I2C bus, a missing sensor or an idle line is
   handled on the chip, without host polling.
-- **A CRC unit** fed bit by bit, so CRCs (SD card, USB) are added in real time.
+- **A CRC unit** fed bit by bit, with any polynomial up to 16 bits, so a
+  CRC (the SD card's CRC7, for example) is added in real time.
 - **Edge waits and a timestamp counter**: a logic analyser in four
   instructions.
 - **A packet RAM with DMA**, so a whole 10 Mbit/s Ethernet frame streams

@@ -327,7 +327,7 @@ docker run --rm -v "$PWD":/work -w /work/fpga/basys3 regymm/openxc7 make
 ## 9. What has been tested
 
 - In simulation (`fpga/test`, run in CI): the bridge, the chip ID, register
-  and instruction-memory read/write, reset, recovery from an abandoned
+  and packet-RAM read/write, reset, recovery from an abandoned
   transaction, the UART and Ethernet self-tests and UART output, all through
   the serial line.
 - The Ethernet commands, against the Python model with a simulated link

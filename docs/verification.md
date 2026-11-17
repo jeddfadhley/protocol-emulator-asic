@@ -1,7 +1,10 @@
 # Verification
 
 PEMU is verified in layers. Each layer catches a different kind of mistake,
-and every layer runs in CI on each push (`.github/workflows/test.yaml`).
+and every layer runs in CI on each push: `.github/workflows/test.yaml` for the
+simulations, proofs and mutation testing, `gds.yaml` for the layout and the
+gate-level re-run. The timed gate-level simulation (section 6) is run
+locally with `test/sdf.mk`.
 
 ```
             docs/isa.md (spec)
@@ -86,7 +89,7 @@ Each scenario runs twice with identical code:
 | `edge_stamp` | edge timestamps differ by exactly the input pulse widths |
 | `single_step` | debug stepping with PC visible after every tick |
 | `program_memory` | a 64-word program: far and near jumps across the halves, a trap into the upper half, PC bit 5 in STATUS; loading engine 1 leaves engine 0's memory alone; IMEM reads as 0 |
-| `usb_ls_tx` | SETUP, DATA0 (GET_DESCRIPTOR), ACK, stuffed DATA1 at exactly 1.5 Mbit/s |
+| `usb_ls_tx` | SETUP, DATA0 (GET_DESCRIPTOR), ACK, stuffed DATA1 at 1.515 Mbit/s (+1.0%; USB allows ±1.5%) |
 | `eth_loopback` | a 10BASE-T frame from engine 0 to engine 1 on-chip, FCS intact |
 | `eth_tx` | pins sampled twice per clock: every half bit exactly 50 ns, preamble, TP_IDL, link pulses |
 | `eth_rx`, `eth_rx_drift` | frames from an independent clock: phase, +100 ppm, jitter, link pulses, oversize frame |
@@ -94,8 +97,10 @@ Each scenario runs twice with identical code:
 | `usb_ls_rx`, `_slow`, `_fast` | a USB device model (its own encoder, ±1.2% clock, keep-alives) sends 7 packets; the sniffer's ring buffer decodes them all |
 | `usb_loopback` | engine 0 sends USB, engine 1 sniffs it on-chip |
 
-The USB receiver decodes every packet at every phase with the sender's
-clock off by up to ±2% (USB allows ±1.5%).
+The USB receiver also has a tolerance test (`sw/tests/test_usb.py`, on the
+model): it decodes every packet with the sender's clock off by up to ±4%, at
+six phases across a bit (USB allows ±1.5%), and the same test confirms that
+it does lose packets at ±8%.
 
 The Ethernet receiver also has a tolerance test: every sender clock phase,
 ±2000 ppm, ±4 ns of jitter on every edge, all frames must arrive intact
@@ -103,10 +108,10 @@ The Ethernet receiver also has a tolerance test: every sender clock phase,
 
 ## 4. Formal proofs (`formal/run.sh`)
 
-The properties live in `ifdef FORMAL` blocks in `src/pe_engine.v` and
-`src/pe_fifo.v`. They are checked with Yosys and yosys-smtbmc (Yices) by
+The properties live in `ifdef FORMAL` blocks in `src/pe_engine.v`,
+`src/pe_fifo.v` and `src/pe_dma.v`. They are checked with Yosys and yosys-smtbmc (Yices) by
 bounded model checking from reset **and k-induction**, so they hold in every
-reachable state, not just the first 16 cycles.
+reachable state, not just the first 16-20 cycles (16 in CI, 20 by default).
 
 Engine:
 - shift counts stay within 0-16 and FIFO levels within 0-4;
@@ -148,11 +153,11 @@ Mutation testing asks whether the tests would notice a bug. The script
 plants 48 realistic bugs, one at a time, and reruns the relevant tests. The
 bugs include an off-by-one in a threshold, a missing decrement, a wrong CRC
 tap, a missing synchronizer stage, broken engine priority, and an SPI pop on
-the wrong clock edge, plus 12 for v2: DMA priority and address bugs, RAM
-port bugs, a differential pin that is not inverted, an any-edge wait
-compared with the wrong level, and 6 for the timing work (late pins that are
-not late, a mis-wired STEP pulse, a ring buffer that runs out...), and three
-for v3 (a TX transfer that takes the packet RAM's read port while the host
+the wrong clock edge (25 in all), plus 13 for v2: DMA priority and
+address bugs, a ring buffer that runs out, RAM port bugs, a differential pin
+that is not inverted, an any-edge wait compared with the wrong level; 7 for
+the timing work (late pins that are not late, a mis-wired STEP pulse, a
+fetch address that misses a restart...); and three for v3 (a TX transfer that takes the packet RAM's read port while the host
 is reading, a latch-memory word that opens half a clock early, and a
 packet RAM read that misses a write still waiting to be stored). **All 48
 are caught.**
@@ -167,7 +172,7 @@ cover the rest.
 
 The first run caught 24. The survivor, a PUSH `iffull` off by one, led to the
 directed threshold sweep in section 2. For v2, the first run caught 10 of
-12. The survivors (an any-edge wait compared with the polarity bit, and a
+the 12 bugs planted at the time. The survivors (an any-edge wait compared with the polarity bit, and a
 differential pin whose direction was not mirrored) led to the directed
 feature programs.
 
@@ -195,8 +200,8 @@ and reached +2.72 ns typical but -7.86 ns (about 36 MHz) at the slow corner.
 
 The flow optimises timing at the typical corner, as is usual for Tiny
 Tapeout, so 50 MHz is the design's typical rating. All protocol firmware
-except the USB demo (which needs 48 MHz for exact 1.5 Mbit/s) runs at any
-clock by recomputing `CLKDIV`.
+runs at any clock by recomputing `CLKDIV`; USB low speed needs a clock that
+gives about 1.5 Mbit/s (50 MHz gives 1.515 Mbit/s, within USB's ±1.5%).
 
 ### Timed gate-level simulation (`test/sdf.mk`)
 
@@ -327,11 +332,12 @@ the timing repair was only run at the typical corner. The fixes:
 ## Running everything locally
 
 ```
-cd sw && python -m pytest -q tests          # model, assembler, USB, board driver
-cd test && make TB=core                      # lockstep co-simulation
-cd test && make                              # chip-level scenarios over SPI
-formal/run.sh                                # formal proofs (needs yices)
-python3 test/mutate.py                       # mutation testing (~40 minutes)
+# each line from the repository root
+(cd sw && python -m pytest -q tests)        # model, assembler, USB, board driver
+(cd test && make TB=core)                   # lockstep co-simulation
+(cd test && make)                           # chip-level scenarios over SPI
+formal/run.sh                               # formal proofs (needs yices)
+python3 test/mutate.py                      # mutation testing (~40 minutes)
 ```
 
 Note: cocotb's Makefile cannot handle a space in the project path. Run from a

@@ -68,7 +68,8 @@ loopback.
 
 **Ping the chip:** wire an RJ45 jack with magnetics (TD+/TD- from `uio[0]`/`uio[1]` through 33-47 Ω,
 RD+/RD- through a comparator into `ui_in[0]`), give the laptop the address 192.168.7.1/24, run
-`chip.eth_start(); chip.eth_serve()`, then `ping 192.168.7.2`.
+`chip = pemu_board.Pemu(pemu_board.TTBoardSpi()); chip.eth_start(); chip.eth_serve()`, then
+`ping 192.168.7.2`.
 
 **Writing your own protocol:** write a program (see `sw/programs/*.pasm`), assemble it with
 `python3 -m pemu.asm prog.pasm`, then load the words into instruction memory over SPI.

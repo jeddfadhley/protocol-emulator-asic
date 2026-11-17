@@ -3,8 +3,11 @@
 PEMU speaks real 10 Mbit/s Ethernet (10BASE-T) with no Ethernet hardware
 on the chip. Two short programs do the line coding: `eth_tx`
 (16 instructions) and `eth_rx` (15 instructions). The packet RAM and DMA
-feed them at wire speed. Plug the chip into a laptop and the laptop sees a
-link, can `ping` the chip, and receives the chip's UDP packets in Wireshark.
+feed them at wire speed. The aim: plug the chip into a laptop, and the
+laptop sees a link, can `ping` the chip, and receives the chip's UDP packets
+in Wireshark. In simulation all of that works against a laptop model
+(`eth_ping`, below), and on the FPGA board frames pass between the engines;
+a real laptop has not been connected yet.
 
 ```
    laptop  <-- Cat5 cable -->  RJ45 jack with magnetics

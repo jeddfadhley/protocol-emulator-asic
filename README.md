@@ -9,10 +9,12 @@ commands, USB low-speed (both directions) and **10 Mbit/s Ethernet** are
 just programs, all from one 50 MHz clock, and new protocols need no new
 silicon.
 
-**Plug it into a laptop and `ping` it.** About thirty instructions of
+**Built to be `ping`ed by a laptop.** About thirty instructions of
 firmware speak 10BASE-T, with no Ethernet hardware on the chip
-([docs/ethernet.md](docs/ethernet.md)). The same bitstream runs on a
-Digilent Basys 3 FPGA board today ([docs/fpga.md](docs/fpga.md)).
+([docs/ethernet.md](docs/ethernet.md)); in simulation it answers ARP and
+ping from a laptop model, and a real laptop is the next test. The same
+design runs on a Digilent Basys 3 FPGA board today
+([docs/fpga.md](docs/fpga.md)).
 
 Built for the [Jane Street protocol emulator ASIC competition](https://blog.janestreet.com/protocol-emulator-asic-competition/)
 on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in an
@@ -27,7 +29,7 @@ was used is in [docs/ai-usage.md](docs/ai-usage.md).
 | **Program memory** | 64 x 16-bit words per engine; programs up to 64 instructions, relocatable |
 | **Packet RAM + DMA** | 128 x 16-bit words; one DMA channel per engine streams frames at wire speed |
 | **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at 50 MHz (typical silicon; see [timing](docs/verification.md#6-physical-implementation)) |
-| **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs, all with 2-flop synchronizers |
+| **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs; every input has a 2-flop synchronizer |
 | **Host link** | SPI slave: load programs, configure, stream data, debug |
 | **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX; added after the hardware freeze: 1-Wire, NEC infrared, PS/2 host, ARM SWD, CAN transmit with arbitration ([docs/new-protocols.md](docs/new-protocols.md)) |
 | **Timing resolution** | 10 ns on every output pin at 50 MHz (half-clock `late` writes) |
@@ -116,8 +118,8 @@ at robust protocols and at being verifiable:
   UART, USB and Ethernet self-tests and 100/100 Ethernet frames (tested
   with v2; v3's larger program memory has not been on the board yet).
 - **Layout signed off** in Tiny Tapeout CI: DRC, LVS, antenna and precheck
-  clean, with the chip tests re-run on the gate-level netlist, and again
-  with the layout's real gate delays at all three process corners.
+  clean, with the chip tests re-run on the gate-level netlist. Locally they
+  also pass with the layout's real gate delays at all three process corners.
 
 ## Repository layout
 
@@ -148,7 +150,8 @@ to the RP2040 and run `import pemu_board; pemu_board.selftest()`.
 
 ## Run it on a Basys 3
 
-The unmodified chip design also runs on a Digilent Basys 3 FPGA board, driven
+The chip design also runs on a Digilent Basys 3 FPGA board (the same RTL,
+with its memories built as FPGA RAM instead of latches), driven
 from a Mac over the board's USB cable. GitHub Actions builds the bitstream
 (artifact `pemu_basys3`) with open-source tools; then:
 

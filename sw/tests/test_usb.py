@@ -52,3 +52,34 @@ def test_monitor_flags_timing_errors():
     for s in wave + [3] * 8:
         mon.step(s)
     assert mon.errors and "lasted 5 clocks" in mon.errors[0]
+
+
+# The receiver (usb_ls_rx firmware on the model, which the co-simulation ties
+# to the RTL clock for clock) against a device whose clock is off by up to
+# +-4%, at 6 phases across one bit. USB low speed only requires +-1.5%.
+USB_BIT_NS = 1e9 / 1.5e6
+PHASES = [i * USB_BIT_NS / 6 for i in range(6)]
+
+
+def _usb_rx_ok(ppm, phase_ns):
+    import asyncio
+
+    from pemu import scenarios
+    from pemu.bench import ModelBench
+
+    try:
+        asyncio.run(scenarios._usb_rx(ModelBench(), ppm=ppm, phase_ns=phase_ns))
+        return True
+    except AssertionError:
+        return False
+
+
+@pytest.mark.parametrize("ppm", [-40000, -20000, -15000, 0, 15000, 20000, 40000])
+def test_usb_rx_tolerance(ppm):
+    assert all(_usb_rx_ok(ppm, p) for p in PHASES)
+
+
+def test_usb_rx_tolerance_can_fail():
+    """The sweep above means something: at 8% the receiver loses packets."""
+    assert not _usb_rx_ok(80000, PHASES[0])
+    assert not _usb_rx_ok(-80000, PHASES[0])
