@@ -337,6 +337,10 @@ FEATURES = [
     ("skip", "skip x<y\nmov x, x + y\nskip xodd\nskip !pin\nmov y, y + time\nskip x==y\n"
              "set x, {k}\nskip xneg [1]\nmov y, y + pins\nskip !flag {k}\nskip osre\nout x, 3\n"
              "skip txdata\nmov x, ~x\nskip rxfull\nin y, 4"),
+    # comparisons at their boundaries: X == Y, X = Y +- 1
+    ("compare", "set x, {k}\nset y, {k}\nskip x<y\nmov x, ~x\nset x, {k}\nskip x>=y\nmov y, ~y\n"
+                "set y, {k}\nskip x==y\nmov x, ~x\nmov x, ~x\nmov x, x + y\nskip x<y\nset y, 0\n"
+                "mov y, x\nmov x, ~null\nmov x, x + y\nskip x<y\nmov y, ~y\nskip x!=y\nin x, 1"),
     ("add", "mov x, x + y\nmov y, y + x\nmov x, x + time\nmov y, ~y\nmov y, y + isr\n"
             "mov x, x + osr\nmov y, y + crc\nmov x, x + pins\nmov y, y + null\nin x, 5\nout y, 3"),
 ]

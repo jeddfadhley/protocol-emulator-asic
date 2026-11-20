@@ -81,7 +81,7 @@ Correctness rests on checks anyone can re-run, not on review.
 | **Lockstep co-simulation** | The RTL and a separate Python model agree on every register, pin and packet RAM word, every clock, over random programs covering the whole instruction encoding (about 700,000 compared clocks per CI run). |
 | **Protocol scenarios** | 40 tests run real firmware against device models that enforce each protocol's own timing rules, through the chip's real SPI pins, on the RTL and again on the routed gate-level netlist. |
 | **Formal proofs** | Cycle exactness, FIFO safety and ordering, trap behaviour, DMA rules: proven for all inputs (bounded model checking plus induction). |
-| **Mutation testing** | 48 realistic bugs planted one at a time; the tests catch all 48. This checks the tests themselves. |
+| **Mutation testing** | 59 realistic bugs planted one at a time; the tests catch all 59. This checks the tests themselves. |
 | **Timed gate-level simulation** | All 40 tests also pass on the routed netlist with its real gate delays, at all three process corners. This catches races that zero-delay simulation cannot. |
 | **Real hardware** | The same RTL on a Basys 3 FPGA board passes the UART, USB and Ethernet self-tests. |
 | **Layout sign-off** | Tiny Tapeout CI: DRC, LVS, antenna and precheck clean. |

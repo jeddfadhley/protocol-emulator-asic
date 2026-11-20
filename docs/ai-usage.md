@@ -56,7 +56,7 @@ result in these documents comes from a tool, not from the AI's say-so.
   independent check.
 - **Proofs instead of examples** for the properties that matter most: cycle
   exactness, FIFO safety, trap behaviour (`formal/run.sh`).
-- **Tests of the tests.** Mutation testing plants 48 realistic bugs in the
+- **Tests of the tests.** Mutation testing plants 59 realistic bugs in the
   RTL, one at a time; the suite must catch every one. This guards against
   tests that pass because they check too little, which is easy to write and
   hard to notice.
@@ -87,6 +87,7 @@ happened. Each was caught by a check, not by luck.
 | The latch memory added a half-clock path that failed timing at the slow corner | the layout's timing report |
 | A script that watched for CI results queried the wrong workflow name, so a failed layout went unreported for two days | noticing that the script never printed a run ID |
 | v4's first `skip` jumped over the next instruction in zero ticks, so a branch's timing depended on its condition, breaking the "every path takes the same time" style the firmware relies on | writing the CAN receiver, whose sample point and ACK edge must stay on the bit grid on every path; `skip` was changed to cancel the instruction instead, before any layout run |
+| v4's tests did not exercise `x<y` with X equal to Y, so a comparison off by one would have passed | mutation testing (the `x<=y` mutant survived); a directed boundary test was added |
 | The assembler lower-cased condition names, so `skip !flag F` could not use a `.define`d flag number | assembling the CAN receiver |
 
 One limit of simulation came up and is stated rather than hidden: a latch

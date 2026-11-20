@@ -18,7 +18,7 @@ locally with `test/sdf.mk`.
  (model)                       │      RTL driven through its real SPI pins
                                │
                      formal proofs (BMC + k-induction)
-                     mutation testing (48 planted bugs)
+                     mutation testing (59 planted bugs)
                      gate-level re-run of the chip tests (CI)
 ```
 
@@ -150,7 +150,7 @@ assumed. It is assumed only when the FIFO is checked on its own.
 ## 5. Mutation testing (`test/mutate.py`)
 
 Mutation testing asks whether the tests would notice a bug. The script
-plants 48 realistic bugs, one at a time, and reruns the relevant tests. The
+plants 59 realistic bugs, one at a time, and reruns the relevant tests. The
 bugs include an off-by-one in a threshold, a missing decrement, a wrong CRC
 tap, a missing synchronizer stage, broken engine priority, and an SPI pop on
 the wrong clock edge (25 in all), plus 13 for v2: DMA priority and
@@ -159,8 +159,15 @@ that is not inverted, an any-edge wait compared with the wrong level; 7 for
 the timing work (late pins that are not late, a mis-wired STEP pulse, a
 fetch address that misses a restart...); and three for v3 (a TX transfer that takes the packet RAM's read port while the host
 is reading, a latch-memory word that opens half a clock early, and a
-packet RAM read that misses a write still waiting to be stored). **All 48
-are caught.**
+packet RAM read that misses a write still waiting to be stored); and 11
+for v4 (x<y computed as x<=y, negation ignored, the wrong flag tested, a
+skip that never cancels or a cancelled instruction that still runs, a wake
+that never wakes or stays armed, add that overwrites, an ignored reset
+strap...). **All 59 are caught.**
+
+The first v4 run caught 58: `x<y` computed as `x<=y` survived, because
+random X and Y are almost never equal. A directed co-simulation program
+that compares X and Y at equality and one apart now catches it.
 
 One latch-memory bug cannot be caught this way: closing a word on the
 rising edge instead of the falling edge. In a zero-delay simulation the
