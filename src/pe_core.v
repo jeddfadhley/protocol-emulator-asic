@@ -34,7 +34,7 @@ module pe_core (
              A_RAM_ADDR = 7'h68, A_RAM_DATA = 7'h69, A_DMA0 = 7'h6A, A_DMA1 = 7'h6B,
              A_FLAG_SET = 7'h6C, A_FLAG_CLR = 7'h6D, A_VERSION = 7'h6E, A_PIN_LATE = 7'h6F,
              A_IMEM_SEL = 7'h70;
-  localparam [15:0] CHIP_ID = 16'h5045, VERSION = 16'h0003;
+  localparam [15:0] CHIP_ID = 16'h5045, VERSION = 16'h0004;
 
   // One instruction memory per engine, each read only by its engine's fetch.
   // The host writes them through the 0x00-0x3F window (IMEM_SEL picks which)
@@ -218,7 +218,10 @@ module pe_core (
       ctrl    <= 3'b000;
       imem_sel <= 2'b11;
       flags   <= 8'h00;
-      pin_out <= 16'h0000;
+      // Strap (v4): ui_in[7] high during reset starts the dedicated
+      // outputs uo_out[6:0] (pins 8-14) high, the idle level of most
+      // buses (UART, CAN TXD, chip selects). Low keeps them at 0.
+      pin_out <= {1'b0, {7{pins_ext[15]}}, 8'h00};
       pin_oe  <= 16'h0000;
       pin_late <= 16'h0000;
       sync1   <= 16'h0000;

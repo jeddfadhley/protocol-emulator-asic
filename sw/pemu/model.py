@@ -24,7 +24,7 @@ IMEM_WORDS = 64  # per engine
  A_RAM_ADDR, A_RAM_DATA, A_DMA0, A_DMA1, A_FLAG_SET, A_FLAG_CLR, A_VERSION,
  A_PIN_LATE, A_IMEM_SEL) = range(0x60, 0x71)
 CHIP_ID = 0x5045
-VERSION = 0x0003
+VERSION = 0x0004
 
 # Engine register offsets
 (R_CLKDIV, R_PROG, R_PINMAP, R_PINCFG, R_SHIFT, R_TIMEOUT, R_TRAP, R_CRCPOLY,
@@ -71,6 +71,13 @@ def nfield(v):
     """Decode a 4-bit count field where 0 means 16."""
     v &= 15
     return 16 if v == 0 else v
+
+
+# Condition codes shared by SKIP and WAKE (v4): [4] negate, [3:0] select.
+COND_X_LT_Y, COND_X_EQ_Y, COND_XNEG, COND_XODD, COND_TXDATA, COND_RXFULL, \
+    COND_PIN, COND_OSRE = range(8)
+COND_FLAG0 = 8  # 8-15: event flag 0-7 is set
+COND_NOT = 16
 
 
 def crc_step(crc, poly, bit):
@@ -146,6 +153,8 @@ class Engine:
     rx_ovf: int = 0
     tx_ovf: int = 0
     pop_armed: int = 0
+    wake: int = 0         # armed WAKE condition: 0 = none, else 32 | code
+    annul: int = 0        # a SKIP's condition held: cancel the next instruction
     now: int = 0
     txf: list = field(default_factory=list)
     rxf: list = field(default_factory=list)
@@ -204,10 +213,37 @@ class Engine:
         self.pc = self.delay = self.isr = self.isr_cnt = self.osr = 0
         self.osr_cnt = 16
         self.armed = self.edge_lvl = self.to_cnt = self.time = self.divcnt = self.stalled = 0
+        self.wake = self.annul = 0
 
     def source(self, src, pin_in):
         return [rotr(pin_in, self.in_base), self.x, self.y, 0,
                 self.crc, self.now, self.isr, self.osr][src]
+
+    def cond(self, code, pin_in, flags):
+        """Evaluate a SKIP/WAKE condition code (docs/isa.md, conditions)."""
+        sel = code & 15
+        if sel == COND_X_LT_Y:
+            r = self.x < self.y
+        elif sel == COND_X_EQ_Y:
+            r = self.x == self.y
+        elif sel == COND_XNEG:
+            r = self.x >> 15 & 1
+        elif sel == COND_XODD:
+            r = self.x & 1
+        elif sel == COND_TXDATA:
+            r = len(self.txf) > 0
+        elif sel == COND_RXFULL:
+            r = len(self.rxf) >= FIFO_DEPTH
+        elif sel == COND_PIN:
+            r = pin_in >> self.jmp_pin & 1
+        elif sel == COND_OSRE:
+            r = self.osr_cnt >= self.pull_thresh
+        else:
+            r = flags >> (sel - COND_FLAG0) & 1
+        return bool(r) != bool(code & COND_NOT)
+
+    def next_pc(self, pc):
+        return self.wrap_bottom if pc == self.wrap_top else (pc + 1) & 63
 
     def execute(self, pin_in, flags, imem, fx):
         """Run one tick. Mutates self; side effects on shared state go in fx."""
@@ -229,9 +265,15 @@ class Engine:
         done = True
         trapped = False
         jump = None
+        skip = False
+        wake = 0   # the WAKE condition armed by this instruction
         pins = Effects()  # instruction's own pin writes, merged under side-set
+        cancelled, self.annul = self.annul, 0
 
-        if op in (0, 6):  # JMP; op 6 reaches the upper 32 words
+        if cancelled:
+            pass  # skipped: no operation, but side-set and delay as usual
+
+        elif op in (0, 6):  # JMP; op 6 reaches the upper 32 words
             cond, addr = (ins >> 5) & 7, (ins & 31) | (32 if op == 6 else 0)
             take = [True, self.x == 0, self.x != 0, self.y == 0, self.y != 0,
                     self.x != self.y, pin(self.jmp_pin) == 1,
@@ -263,6 +305,9 @@ class Engine:
                 done = bool(self.armed) and p == pol
                 if not done and p != pol:
                     self.armed = 1
+            # An armed WAKE condition also finishes the wait
+            if not done and self.wake and self.cond(self.wake, pin_in, flags):
+                done = True
             trapped = not done and tmo and self.to_cnt == self.timeout
 
         elif op == 2:  # IN
@@ -353,9 +398,9 @@ class Engine:
             if dst == 0:
                 pins.write_pins(0, self.out_base, self.out_count, v, late=mop == 3)
             elif dst == 1:
-                self.x = v
+                self.x = (self.x + v) & M16 if mop == 3 else v  # op 3: add
             elif dst == 2:
-                self.y = v
+                self.y = (self.y + v) & M16 if mop == 3 else v
             elif dst == 3:
                 self.crc = v
             elif dst == 4:
@@ -382,6 +427,10 @@ class Engine:
                     fx.flag_set |= 1 << (imm & 7)
             elif dst == 4:
                 pins.write_pins(1, self.set_base, self.set_count, imm)
+            elif dst == 5:  # WAKE: the next WAIT also finishes on this condition
+                wake = 32 | imm
+            elif dst == 6:  # SKIP: cancel the next instruction if the condition holds
+                skip = self.cond(imm, pin_in, flags)
 
         # Instruction pin writes, then side-set on top (side-set wins).
         fx.out_mask, fx.out_val, fx.late_val = pins.out_mask, pins.out_val, pins.late_val
@@ -394,14 +443,14 @@ class Engine:
         if done:
             if jump is not None:
                 self.pc = jump
-            elif self.pc == self.wrap_top:
-                self.pc = self.wrap_bottom
             else:
-                self.pc = (self.pc + 1) & 63
+                self.pc = self.next_pc(self.pc)
             self.delay = dly
             self.to_cnt = 0
             self.armed = 0
             self.stalled = 0
+            self.wake = wake
+            self.annul = int(skip)
         elif trapped:
             self.pc = self.trap
             self.delay = 0
@@ -409,6 +458,7 @@ class Engine:
             self.armed = 0
             self.timed_out = 1
             self.stalled = 1
+            self.wake = 0
         else:
             self.to_cnt = (self.to_cnt + 1) & M16
             self.stalled = 1
@@ -417,10 +467,12 @@ class Engine:
 class Core:
     """The PEMU core: two engines with their instruction memories, pins and flags."""
 
-    def __init__(self):
-        self.reset()
+    def __init__(self, strap=0):
+        self.reset(strap)
 
-    def reset(self):
+    def reset(self, strap=0):
+        """Reset. `strap` is ui_in[7] while reset is held: when 1, the
+        dedicated outputs uo_out[6:0] (pins 8-14) start high (v4)."""
         self.imem = [[0] * IMEM_WORDS, [0] * IMEM_WORDS]  # one per engine
         self.imem_sel = 3   # IMEM_SEL: memories a host write reaches
         self.ram = [0] * RAM_WORDS
@@ -429,10 +481,10 @@ class Core:
         self.engines = [Engine(), Engine()]
         self.ctrl = 0
         self.flags = 0
-        self.pin_out = 0
+        self.pin_out = 0x7F00 if strap else 0
         self.pin_oe = 0
         self.pin_late = 0
-        self.pin_prev = 0   # PIN_OUT one clock ago: what late pins show first
+        self.pin_prev = self.pin_out  # PIN_OUT one clock ago: what late pins show first
         self.sync1 = 0
         self.sync2 = 0
         self.pulses = 0     # CTRL pulse bits [9:4] written last clock

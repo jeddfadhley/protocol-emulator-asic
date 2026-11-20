@@ -26,6 +26,11 @@ SOURCES = {"pins": 0, "x": 1, "y": 2, "null": 3, "crc": 4, "time": 5, "isr": 6, 
 OUT_DSTS = {"pins": 0, "x": 1, "y": 2, "null": 3, "pindirs": 4, "pc": 5, "isr": 6}
 MOV_DSTS = {"pins": 0, "x": 1, "y": 2, "crc": 3, "pindirs": 4, "pc": 5, "isr": 6, "osr": 7}
 SET_DSTS = {"pins": 0, "x": 1, "y": 2, "pindirs": 4}
+SET_WAKE, SET_SKIP = 5, 6  # v4: SET destinations 5 and 6 take a condition code
+# Conditions for skip and wake (v4): [4] negates, [3:0] selects.
+CONDS = {"x<y": 0, "x==y": 1, "xneg": 2, "xodd": 3, "txdata": 4, "rxfull": 5,
+         "pin": 6, "osre": 7}
+COND_ALIASES = {"x>=y": "!x<y", "x!=y": "!x==y"}
 
 OP_JMP, OP_WAIT, OP_IN, OP_OUT, OP_PUSHPULL, OP_MOV, OP_JMP_HI, OP_SET = range(8)
 MAX_WORDS = 64  # one engine's instruction memory
@@ -75,6 +80,34 @@ def _count(tok, defines, what):
     if not 1 <= n <= 16:
         raise AsmError(f"{what} bit count must be 1-16, got {n}")
     return n & 15
+
+
+def _cond(text, defines):
+    """Condition code for skip/wake: 'x<y', '!pin', 'flag 3', 'x>=y', ..."""
+    t = " ".join(text.split())
+    t = COND_ALIASES.get(t.replace(" ", "").lower(), t)
+    neg = t.startswith("!")
+    if neg:
+        t = t[1:].strip()
+    if t.lower().startswith("flag"):
+        idx = _num(t[4:], defines)   # keeps its case: it may be a .define
+        if not 0 <= idx < 8:
+            raise AsmError("flag index must be 0-7")
+        code = 8 + idx
+    elif t.replace(" ", "").lower() in CONDS:
+        code = CONDS[t.replace(" ", "").lower()]
+    else:
+        raise AsmError(f"unknown condition '{text}'")
+    return code | (16 if neg else 0)
+
+
+def cond_name(code):
+    """Canonical spelling of a condition code."""
+    sel = code & 15
+    name = f"flag {sel - 8}" if sel >= 8 else {v: k for k, v in CONDS.items()}[sel]
+    if code & 16:
+        return {"x<y": "x>=y", "x==y": "x!=y"}.get(name, "!" + name)
+    return name
 
 
 def assemble(source, name=None):
@@ -265,10 +298,21 @@ def _operands(mnem, args, rest, defines, labels):
                 raise AsmError(f"unexpected '{t}'")
         return OP_PUSHPULL, ((mnem == "pull") << 7) | (cond << 6) | (block << 5)
 
+    if mnem in ("skip", "wake"):
+        if not rest:
+            raise AsmError(f"{mnem} needs a condition")
+        return OP_SET, ((SET_SKIP if mnem == "skip" else SET_WAKE) << 5) | _cond(rest, defines)
+
     if mnem == "mov":
         dst = MOV_DSTS[args[0].lower()]
         src = args[1].replace(" ", "").lower()
         mop = 0
+        m = re.fullmatch(r"([xy])\+(\w+)", src)
+        if m:
+            # mov x, x + src: add (op 3 with destination X or Y)
+            if m.group(1) != args[0].lower():
+                raise AsmError("add form is 'mov x, x + src' or 'mov y, y + src'")
+            return OP_MOV, (dst << 5) | (3 << 3) | SOURCES[m.group(2)]
         if src.endswith("late"):
             # half a clock late (pins only): no ~ or :: with it
             if args[0].lower() != "pins":
@@ -351,9 +395,14 @@ def disassemble(word, side_count=0):
     elif op == OP_MOV:
         mop = (word >> 3) & 3
         if mop == 3:
-            if (word >> 5) & 7 != 0:
+            dst = (word >> 5) & 7
+            if dst == 0:
+                text = f"mov pins, {_SRC_NAMES[word & 7]} late"
+            elif dst in (1, 2):
+                r = _MOV_NAMES[dst]
+                text = f"mov {r}, {r} + {_SRC_NAMES[word & 7]}"
+            else:
                 return raw
-            text = f"mov pins, {_SRC_NAMES[word & 7]} late"
         else:
             prefix = ["", "~", "::"][mop]
             text = f"mov {_MOV_NAMES[(word >> 5) & 7]}, {prefix}{_SRC_NAMES[word & 7]}"
@@ -365,6 +414,8 @@ def disassemble(word, side_count=0):
             text = f"{'clr' if imm & 16 else 'set'} flag, {imm & 7}"
         elif dst in _SET_NAMES:
             text = f"set {_SET_NAMES[dst]}, {imm}"
+        elif dst in (SET_SKIP, SET_WAKE):
+            text = f"{'skip' if dst == SET_SKIP else 'wake'} {cond_name(imm)}"
         else:
             return raw
     else:

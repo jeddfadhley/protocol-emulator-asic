@@ -147,7 +147,7 @@ def test_sync_recovers_from_stale_bytes():
 
 def test_cli_check(link):
     rc, out = run(["check"], link)
-    assert rc == 0 and "0x5045" in out and "version 3" in out
+    assert rc == 0 and "0x5045" in out and "version 4" in out
 
 
 def test_cli_selftest(link):

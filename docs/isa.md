@@ -1,4 +1,4 @@
-# PEMU architecture and ISA reference (v3)
+# PEMU architecture and ISA reference (v4)
 
 PEMU is a programmable protocol emulator. Two small **engines**, each with
 its own 64-word instruction memory, run programs and drive or sample up to 16 pins
@@ -26,8 +26,16 @@ the host SPI `CS_N`, `SCK` and `MOSI` (also readable as pins 12-14, which is
 harmless).
 
 The chip holds two 16-bit pin registers: `PIN_OUT` (value) and `PIN_OE`
-(direction, 1 = drive). Both reset to 0. Open-drain behaviour (I2C) is done by
-keeping `PIN_OUT` at 0 and toggling `PIN_OE`.
+(direction, 1 = drive). `PIN_OE` resets to 0, so pins 0-7 float until
+configured. `PIN_OUT` resets to 0, except that pins 8-14 (`uo_out[6:0]`,
+which are always driven) take the level of `ui_in[7]` while reset is held
+(the **reset strap**, v4): tie `ui_in[7]` high and they start high, the idle
+level of UART TX, CAN TXD and active-low chip selects, so nothing on those
+buses sees a false start bit or a dominant level before the chip is
+configured. Tie it low (or leave the demo board's switch off) for the v3
+behaviour. The strap is only read during reset; afterwards `ui_in[7]` is an
+ordinary input (pin 15). Open-drain behaviour (I2C) is done by keeping
+`PIN_OUT` at 0 and toggling `PIN_OE`.
 
 **Differential pairs.** With `PINCFG.DIFF` set, every write an engine makes
 to pin `OUT_BASE` (value or direction, from any instruction or side-set) is
@@ -67,6 +75,8 @@ Each engine has:
 | `OSR`      | 16    | output shift register, with a count of 0-16 (16 = empty) |
 | `CRC`      | 16    | left-justified CRC shift register |
 | `TIME`     | 16    | counts engine ticks, wraps |
+| `WAKE`     | 6     | a condition armed by `wake` for the next WAIT (v4) |
+| `ANNUL`    | 1     | set by a `skip` whose condition held: cancel the next instruction (v4) |
 | TX FIFO    | 4x16  | host to engine |
 | RX FIFO    | 4x16  | engine to host |
 
@@ -135,6 +145,60 @@ Examples: CRC-7 (SD card) `0x1200`, CRC-5 (USB) `0x2800`, CRC-16/CCITT
   empty, the OUT stalls.
 
 A threshold field of 0 means 16.
+
+### 2.5 Conditions, skip, wake and add (v4)
+
+v3's engines could not compare two numbers or wait for two things at once
+(see `docs/new-protocols.md`). v4 adds three instructions in encodings that
+v3 left unused, so every v3 program runs unchanged.
+
+**Conditions.** `skip` and `wake` take a 5-bit condition code: bit 4 negates
+it, bits 3-0 select it.
+
+| Code | Syntax   | True when |
+|------|----------|-----------|
+| 0    | `x<y`    | X < Y, unsigned (`x>=y` is its negation) |
+| 1    | `x==y`   | X == Y (`x!=y` is its negation) |
+| 2    | `xneg`   | X bit 15 is 1 (X is negative, as a signed number) |
+| 3    | `xodd`   | X bit 0 is 1 |
+| 4    | `txdata` | the TX FIFO holds at least one word |
+| 5    | `rxfull` | the RX FIFO is full |
+| 6    | `pin`    | input pin `JMP_PIN` (absolute) is 1 |
+| 7    | `osre`   | OSR count >= `PULL_THRESH` (the OSR is empty: the opposite of `jmp !osre`) |
+| 8-15 | `flag n` | event flag n (0-7) is set. The flag is not cleared. |
+
+Write `!` before a condition to negate it (`!pin`, `!flag 2`, `!txdata`).
+
+**`skip cond`** (SET destination 6): when the condition holds, the next
+instruction is **cancelled**: it does nothing (no jump, no register, pin,
+FIFO or flag change, and a cancelled WAIT does not wait), but it still
+takes its `1 + delay` ticks and still drives its side-set. So a program
+takes the same time whichever way the condition goes, and a clock made
+with side-set keeps its shape. `skip` + `mov` (or `set`, `in`, ...) makes
+that one instruction conditional. `skip` + `jmp` is a conditional jump on
+any condition, and both outcomes reach their next instruction after the
+same number of ticks.
+
+**`wake cond`** (SET destination 5): arms the condition for the next
+instruction. If that instruction is a WAIT, it also completes on any
+evaluation where the armed condition holds, as if its own condition had
+held (same delay, same side-set). The wait's own condition is checked
+first, so a flag it waits for is still cleared when it is the reason. The
+armed condition is dropped when the next instruction completes or traps,
+and by restart; a stalled WAIT keeps it. Instructions other than WAIT
+ignore it. To tell afterwards which condition ended the wait, test one of
+them (for example `jmp pin` when `wake txdata` guards a pin wait).
+
+Typical uses: `wake txdata` + `wait 0 pin 1` waits for "the device starts
+talking or the host has something to send" (PS/2); `wake pin` (JMP_PIN =
+chip select) + `wait 1 edge 0` waits for a clock edge but gives up when the
+host deselects (SPI device).
+
+**`mov x, x + src`** and **`mov y, y + src`** (MOV op 3 with destination
+X or Y): add a source to the register, modulo 2^16. Subtract by adding the
+complement: `mov y, ~y` then `mov x, x + y` gives X - Y - 1. Typical use:
+measure a pulse with `mov x, ~time` at one edge and `mov x, x + time` at
+the next (X = width - 1 ticks), then classify it with `skip x<y`.
 
 ## 3. Instruction encoding
 
@@ -209,15 +273,17 @@ the recorded level.
 Destinations: `0 PINS` (`OUT_COUNT` bits at `OUT_BASE`), `1 X`, `2 Y`,
 `3 CRC`, `4 PINDIRS`, `5 PC`, `6 ISR` (count = 0), `7 OSR` (count = 0).
 
-Ops: `0` none, `1` invert (`~`), `2` bit-reverse (`::`), `3` late (pins only:
-the pads change half a clock later, see section 1; with any other destination
-it acts as none).
+Ops: `0` none, `1` invert (`~`), `2` bit-reverse (`::`), `3`: with
+destination PINS, late (the pads change half a clock later, see section 1);
+with X or Y, add (`mov x, x + src`, see 2.5); with any other destination it
+acts as none.
 
 ### SET destinations
 
 `0 PINS` (`SET_COUNT` bits at `SET_BASE`), `1 X`, `2 Y`, `3 FLAG`
 (imm[4] = 0 sets flag imm[2:0], imm[4] = 1 clears it), `4 PINDIRS`,
-`5`-`7` reserved (NOP).
+`5 WAKE` (imm = condition, see 2.5), `6 SKIP` (imm = condition), `7`
+reserved (NOP).
 
 ### PUSH / PULL
 
@@ -313,7 +379,7 @@ as 0 without losing a word that arrives during the read.
 | 0x6B        | DMA1     | engine 1 channel, same layout |
 | 0x6C        | FLAG_SET | write only: `FLAGS \|= value[7:0]` |
 | 0x6D        | FLAG_CLR | write only: `FLAGS &= ~value[7:0]` |
-| 0x6E        | VERSION  | read only: `0x0003` |
+| 0x6E        | VERSION  | read only: `0x0004` |
 | 0x6F        | PIN_LATE | read only: pins whose last value write was late (see 1, half-clock timing) |
 | 0x70        | IMEM_SEL | [0] engine 0, [1] engine 1: the instruction memories an `IMEM` write reaches. Reset 3 (both). |
 
@@ -341,7 +407,7 @@ Engine block offsets:
 `SET_COUNT` values 6 and 7 act as 5.
 
 **Restart** resets PC, the delay counter, ISR, OSR (count 16, empty), the
-timeout counter, the edge-armed bit and recorded level, TIME and the clock
-divider. It does not affect the DMA channels. It keeps X, Y,
+timeout counter, the edge-armed bit and recorded level, the armed WAKE
+condition, a pending SKIP cancel, TIME and the clock divider. It does not affect the DMA channels. It keeps X, Y,
 CRC and the configuration. **Step** runs one tick of a disabled engine.
 **Flush** empties both FIFOs of an engine.

@@ -9,7 +9,8 @@ import random
 
 import cocotb
 
-from pemu.model import A_FLAGS, A_ID, A_PIN_OE, A_PIN_OUT, A_RAM_ADDR, A_RAM_DATA, CHIP_ID
+from pemu.model import (A_FLAGS, A_ID, A_PIN_OE, A_PIN_OUT, A_RAM_ADDR, A_RAM_DATA,
+                        A_VERSION, CHIP_ID)
 from pemu.scenarios import SCENARIOS
 from rtl_bench import RtlBench
 
@@ -28,6 +29,23 @@ async def test_reset_state(dut):
     assert int(dut.uio_out.value) == 0
     assert int(dut.uo_out.value) & 0x7F == 0
     assert await b.read(A_ID) == CHIP_ID
+
+
+@cocotb.test()
+async def test_reset_strap(dut):
+    """v4: ui_in[7] high during reset starts the dedicated outputs high (the
+    idle level of UART, CAN TXD and chip selects); they stay high after
+    reset is released, until something writes them."""
+    b = RtlBench(dut)
+    await b.start_clock(strap=1)
+    assert int(dut.uo_out.value) & 0x7F == 0x7F
+    assert int(dut.uio_oe.value) == 0
+    await b.run(20)
+    assert int(dut.uo_out.value) & 0x7F == 0x7F
+    assert await b.read(A_PIN_OUT) == 0x7F00
+    assert await b.read(A_VERSION) == 4
+    await b.write(A_PIN_OUT, 0)
+    assert int(dut.uo_out.value) & 0x7F == 0
 
 
 @cocotb.test()

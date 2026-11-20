@@ -117,6 +117,8 @@ module pe_engine (
   reg [5:0]  pc;
   reg [4:0]  delay, isr_cnt, osr_cnt;
   reg        armed, edge_lvl, stalled, timed_out, rx_ovf, tx_ovf;
+  reg [5:0]  wake;  // armed WAKE condition: [5] armed, [4:0] condition code
+  reg        annul; // a SKIP's condition held: cancel the next instruction
 
   // Decoded configuration
   wire [5:0] origin      = {prog[3:0], 2'b00};  // in units of 4 words
@@ -222,11 +224,34 @@ module pe_engine (
     end
   endfunction
 
+  // Conditions for SKIP and WAKE: [4] negates, [3:0] selects. A SKIP
+  // tests its own operand, a WAIT the armed WAKE condition, so one
+  // evaluator serves both.
+  wire [4:0] cc = (op == 3'd1) ? wake[4:0] : instr[4:0];
+  reg        cc_raw;
+  always @(*) begin
+    case (cc[3:0])
+      4'd0: cc_raw = (x < y);
+      4'd1: cc_raw = (x == y);
+      4'd2: cc_raw = x[15];
+      4'd3: cc_raw = x[0];
+      4'd4: cc_raw = !tx_empty;
+      4'd5: cc_raw = rx_full;
+      4'd6: cc_raw = pin_in[jmp_pin];
+      4'd7: cc_raw = (osr_cnt >= pull_thresh);
+      default: cc_raw = flags[cc[2:0]];
+    endcase
+  end
+  wire cc_true = cc_raw ^ cc[4];
+
+  // Next PC without a jump
+  wire [5:0] pc_inc1 = (pc == wrap_top) ? wrap_bottom : pc + 6'd1;
+
   // Next-state values computed by the executor
   reg [15:0] x_n, y_n, isr_n, osr_n, crc_n, to_cnt_n, time_n;
-  reg [5:0]  pc_n;
+  reg [5:0]  pc_n, wake_n;
   reg [4:0]  delay_n, isr_cnt_n, osr_cnt_n;
-  reg        armed_n, edge_lvl_n, stalled_n, timed_out_n, rx_ovf_n;
+  reg        armed_n, edge_lvl_n, stalled_n, timed_out_n, rx_ovf_n, annul_n;
 
   // The fetch address (ORIGIN + PC) is registered, computed a clock early
   // from the next PC and ORIGIN, so the add is not in front of the fetch.
@@ -236,7 +261,7 @@ module pe_engine (
   assign fetch_addr = fetch_q;
 
   // Scratch
-  reg        done, trapped, jump;
+  reg        done, trapped, jump, skip;
   reg [5:0]  jump_addr;
   reg        cond;
   reg        p;
@@ -264,6 +289,8 @@ module pe_engine (
     stalled_n = stalled;
     timed_out_n = timed_out;
     rx_ovf_n = rx_ovf;
+    wake_n = wake;
+    annul_n = annul;
 
     tx_pop = 1'b0;
     rx_push = 1'b0;
@@ -284,6 +311,7 @@ module pe_engine (
     done = 1'b1;
     trapped = 1'b0;
     jump = 1'b0;
+    skip = 1'b0;
     jump_addr = 6'd0;
     cond = 1'b0;
     p = 1'b0;
@@ -305,7 +333,10 @@ module pe_engine (
         delay_n = delay - 5'd1;
         stalled_n = 1'b0;
       end else begin
-        case (op)
+        // A cancelled instruction (after a SKIP) has no operation, but its
+        // side-set and delay happen as usual, so timing never depends on
+        // the condition
+        if (!annul) case (op)
           // ---------------- JMP (op 6 is JMP to the upper 32 words)
           3'd0, 3'd6: begin
             case (instr[7:5])
@@ -348,6 +379,8 @@ module pe_engine (
                 end
               end
             endcase
+            // An armed WAKE condition also finishes the wait
+            if (!done && wake[5] && cc_true) done = 1'b1;
             trapped = !done && instr[4] && (to_cnt == timeout);
           end
 
@@ -479,8 +512,9 @@ module pe_engine (
                 i_out_val  = rotl16(v & wmask, out_base);
                 if (instr[4:3] == 2'd3) i_late = i_out_mask;  // mov pins, src late
               end
-              3'd1: x_n = v;
-              3'd2: y_n = v;
+              // op 3 with X or Y: add (mov x, x + src)
+              3'd1: x_n = (instr[4:3] == 2'd3) ? x + v : v;
+              3'd2: y_n = (instr[4:3] == 2'd3) ? y + v : v;
               3'd3: crc_n = v;
               3'd4: begin
                 i_oe_mask = rotl16(wmask, out_base);
@@ -519,7 +553,8 @@ module pe_engine (
                 i_oe_mask = rotl16(wmask, set_base);
                 i_oe_val  = rotl16({11'd0, instr[4:0]} & wmask, set_base);
               end
-              default: ;
+              3'd6: skip = cc_true;  // SKIP: cancel the next instruction, if cond
+              default: ;             // 5 (WAKE) is handled at completion
             endcase
           end
 
@@ -560,12 +595,14 @@ module pe_engine (
 
         if (done) begin
           if (jump) pc_n = jump_addr;
-          else if (pc == wrap_top) pc_n = wrap_bottom;
-          else pc_n = pc + 6'd1;
+          else pc_n = pc_inc1;
           delay_n = dly;
           to_cnt_n = 16'h0000;
           armed_n = 1'b0;
           stalled_n = 1'b0;
+          // WAKE arms its condition for the next instruction only
+          wake_n = (!annul && op == 3'd7 && instr[7:5] == 3'd5) ? {1'b1, instr[4:0]} : 6'd0;
+          annul_n = skip;
         end else if (trapped) begin
           pc_n = trap;
           delay_n = 5'd0;
@@ -573,6 +610,7 @@ module pe_engine (
           armed_n = 1'b0;
           timed_out_n = 1'b1;
           stalled_n = 1'b1;
+          wake_n = 6'd0;
         end else begin
           to_cnt_n = to_cnt + 16'd1;
           stalled_n = 1'b1;
@@ -617,6 +655,8 @@ module pe_engine (
       rx_ovf <= 1'b0;
       tx_ovf <= 1'b0;
       pop_armed <= 1'b0;
+      wake <= 6'd0;
+      annul <= 1'b0;
     end else begin
       if (host_load) pop_armed <= (rx_count != 3'd0);
       else if (host_commit) pop_armed <= 1'b0;
@@ -633,6 +673,8 @@ module pe_engine (
         to_cnt <= 16'h0000;
         time_cnt <= 16'h0000;
         stalled <= 1'b0;
+        wake <= 6'd0;
+        annul <= 1'b0;
       end else begin
         x <= x_n;
         y <= y_n;
@@ -650,6 +692,8 @@ module pe_engine (
         stalled <= stalled_n;
         timed_out <= timed_out_n;
         rx_ovf <= rx_ovf_n;
+        wake <= wake_n;
+        annul <= annul_n;
       end
       divcnt  <= divcnt_d;
       div_hit <= divcnt_d >= clkdiv_d;
@@ -773,6 +817,43 @@ module pe_engine (
 
     // Only a WAIT with the T bit can trap
     if (trapped) assert (op == 3'd1 && instr[4]);
+
+    // v4. A WAKE condition lives for exactly one instruction: any other
+    // instruction that completes, or a trap, disarms it
+    if (tick && delay == 5'd0 && (done || trapped)
+        && !(!annul && op == 3'd7 && instr[7:5] == 3'd5)) assert (wake_n == 6'd0);
+    if (tick && delay == 5'd0 && done && !annul && op == 3'd7 && instr[7:5] == 3'd5)
+      assert (wake_n == {1'b1, instr[4:0]});
+    // A SKIP cancels the next instruction exactly when its condition holds
+    if (tick && delay == 5'd0 && !annul && op == 3'd7 && instr[7:5] == 3'd6)
+      assert (annul_n == cc_true && pc_n == pc_inc1);
+    // A cancelled instruction completes in 1 + delay ticks like any other,
+    // drives its side-set, and does nothing else
+    if (tick && delay == 5'd0 && annul) begin
+      assert (done && !trapped && pc_n == pc_inc1 && delay_n == dly && !annul_n);
+      assert (i_out_mask == 16'h0 && i_oe_mask == 16'h0 && wake_n == 6'd0);
+      assert (flag_set == 8'h0 && flag_clr == 8'h0 && !tx_pop && !rx_push);
+      assert (x_n == x && y_n == y && crc_n == crc && isr_n == isr && osr_n == osr);
+      assert (isr_cnt_n == isr_cnt && osr_cnt_n == osr_cnt && rx_ovf_n == rx_ovf);
+    end
+    // The annul flag only changes when an instruction is evaluated
+    if (!(tick && delay == 5'd0)) assert (annul_n == annul);
+    // The add form changes only its own register, by exactly the source
+    if (tick && delay == 5'd0 && !annul && op == 3'd5 && instr[4:3] == 2'd3) begin
+      if (instr[7:5] == 3'd1) assert (x_n == x + source(instr[2:0]) && y_n == y);
+      if (instr[7:5] == 3'd2) assert (y_n == y + source(instr[2:0]) && x_n == x);
+    end
+  end
+
+  // A woken WAIT completes on the tick its condition is seen, never earlier
+  // and never without one: its own condition, or the armed WAKE condition
+  wire f_own_wait = (instr[6:5] == 2'd0) ? (pin_in[instr[3:0]] == instr[7]) :
+                    (instr[6:5] == 2'd1) ? (pins_rot[instr[3:0]] == instr[7]) :
+                    (instr[6:5] == 2'd2) ? (flags[instr[2:0]] == instr[7]) : 1'b1;
+  always @(*) begin
+    if (tick && delay == 5'd0 && !annul && op == 3'd1 && done)
+      assert (f_own_wait || (wake[5] && cc_true));
+    if (tick && delay == 5'd0 && op == 3'd1 && wake[5] && cc_true) assert (done);
   end
 
   always @(posedge clk) begin

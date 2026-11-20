@@ -60,7 +60,15 @@ carry a `side` value, and the delay field shrinks to `5 - n` bits.
 | `mov pins, <src> late` | like `mov pins`, but the pins change half a clock later (10 ns resolution at 50 MHz) |
 | `set <dst>, <0-31>` | dst: `pins x y pindirs` |
 | `set flag, <n>` / `clr flag, <n>` | raise or clear event flag n |
+| `mov x, x + <src>` / `mov y, y + <src>` | add (v4), modulo 2^16 |
+| `skip <cond>` | cancel the next instruction if cond holds; it still takes its ticks (v4) |
+| `wake <cond>` | the next `wait` also ends when cond holds (v4) |
 | `nop` | `mov y, y` |
+
+Conditions for `skip` and `wake` (v4): `x<y`, `x>=y`, `x==y`, `x!=y`,
+`xneg` (X bit 15), `xodd` (X bit 0), `txdata` (TX FIFO not empty),
+`rxfull`, `pin` (JMP_PIN high), `osre` (OSR empty), `flag <n>`, and any of
+them with `!` in front. See isa.md section 2.5.
 
 ## Worked example: UART transmitter
 
@@ -105,8 +113,18 @@ bit-banged SPI from MicroPython.
   guarantee that each instruction takes exactly `1 + delay`.
 - **Wrap is free.** `.wrap` costs no cycles, so use it instead of a trailing
   `jmp`.
-- **Branch on data** with `out x, 1` followed by `jmp !x, ...`. There is no
-  ALU; host-side code does the arithmetic.
+- **Branch on data** with `out x, 1` followed by `jmp !x, ...`.
+- **Compare and branch on anything** (v4): `skip <cond>` then `jmp`.
+  A cancelled instruction still takes its tick, so both outcomes take the
+  same time: `skip x>=y` + `jmp short` classifies a measured pulse in two
+  ticks either way.
+- **Measure time** (v4): `mov x, ~time` at the start, `mov x, x + time` at
+  the end: X = elapsed ticks - 1. Add with `mov x, x + y`.
+- **Wait for either of two things** (v4): `wake txdata` then `wait 0 pin 1`
+  ends on whichever happens first. Re-test afterwards (`jmp pin`) to see
+  which it was.
+- **Safe power-up levels** (v4): tie `ui_in[7]` high and the dedicated
+  outputs start high instead of low.
 - **Open-drain** (I2C, 1-Wire): keep `PIN_OUT` at 0 and drive `pindirs`.
   Side-set can drive directions too (`.side_set 1 pindirs`).
 - **Timeouts** make protocols robust: `wait 1 pin 1 timeout` with
@@ -153,7 +171,7 @@ bit-banged SPI from MicroPython.
 | `usb_ls_rx.pasm` | USB low-speed receiver/sniffer: re-sync on every edge, timeout-driven sampling, ring DMA |
 | `onewire.pasm` | 1-Wire master: open drain, one slot loop for reads and writes |
 | `nec_ir.pasm` | NEC infrared remote decoder: timing by sampling, timeout trap drops cut-off frames |
-| `ps2_host.pasm` | PS/2 host, both directions: device-driven clock, polling two sources |
+| `ps2_host.pasm` | PS/2 host, both directions: device-driven clock; v4 waits for "clock or host data" with `wake` |
 | `swd.pasm` | ARM Serial Wire Debug as a general half-duplex shifter ([`swdhost.py`](../sw/pemu/swdhost.py)) |
 | `can_tx.pasm` | CAN transmitter: arbitration by read-back, timeout as bus-idle detector |
 

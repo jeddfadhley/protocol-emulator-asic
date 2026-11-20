@@ -25,14 +25,15 @@ def _bits(value, n):
     return [(value >> (n - 1 - i)) & 1 for i in range(n)]
 
 
-def frame_fields(ident, data=b"", rtr=False):
-    """Unstuffed bits from SOF to the end of the CRC (standard 11-bit ID)."""
+def frame_fields(ident, data=b"", rtr=False, bad_crc=False):
+    """Unstuffed bits from SOF to the end of the CRC (standard 11-bit ID).
+    bad_crc flips the CRC's last bit (to test receivers)."""
     if not 0 <= ident < 2048 or len(data) > 8:
         raise ValueError("bad frame")
     bits = [0] + _bits(ident, 11) + [int(rtr), 0, 0] + _bits(len(data), 4)
     for byte in ([] if rtr else data):
         bits += _bits(byte, 8)
-    return bits + _bits(crc15(bits), 15)
+    return bits + _bits(crc15(bits) ^ int(bad_crc), 15)
 
 
 def stuff(bits):
@@ -47,11 +48,11 @@ def stuff(bits):
     return out
 
 
-def frame_bits(ident, data=b"", rtr=False):
+def frame_bits(ident, data=b"", rtr=False, bad_crc=False):
     """The whole frame as sent: stuffed SOF..CRC, CRC delimiter, ACK slot
     (sent recessive), ACK delimiter and 7 EOF bits. Returns (levels,
     monitor flags): every recessive bit is monitored except the ACK slot."""
-    body = stuff(frame_fields(ident, data, rtr))
+    body = stuff(frame_fields(ident, data, rtr, bad_crc))
     levels = body + [1, 1, 1] + [1] * 7
     ack_slot = len(body) + 1
     monitor = [int(lv == 1 and i != ack_slot) for i, lv in enumerate(levels)]
@@ -110,3 +111,54 @@ def decode(bits):
     if tail[0] != 1 or tail[2] != 1 or any(b != 1 for b in tail[3:10]):
         raise CanError(f"form error in {tail}")
     return ident, data, bool(raw[12]), tail[1] == 0, i
+
+
+# ----- the can_rx firmware's output -----
+
+RX_ACKED, RX_ERROR = 0xFFFF, 0xFFFE
+
+
+def rx_split(words):
+    """Split can_rx's word stream into frames, each ending with its status
+    word (bit 15 set). Trailing words without a status are left out."""
+    frames, cur = [], []
+    for w in words:
+        cur.append(w)
+        if w & 0x8000:
+            frames.append(cur)
+            cur = []
+    return frames
+
+
+def rx_decode(words):
+    """One frame from can_rx (its words, ending with the status word).
+    Returns (ident, data, acked); raises CanError for a reported error or
+    bits that do not add up."""
+    *body, status = words
+    if status != RX_ACKED:
+        raise CanError(f"the receiver reported an error ({status:#06x})")
+    bits = []
+
+    def take(word, n):
+        if word >> n:
+            raise CanError(f"word {word:#06x} has more than {n} bits")
+        bits.extend((word >> (n - 1 - i)) & 1 for i in range(n))
+
+    if len(body) < 3:
+        raise CanError("frame too short")
+    take(body[0], 14)                           # ID, RTR, IDE, r0
+    take(body[1], 4)                            # DLC
+    n = 8 * min(body[1], 8) + 15                # data and CRC
+    full, rest = divmod(n, 14)
+    if len(body) != 2 + full + 1:
+        raise CanError(f"expected {3 + full} words, got {len(body)}")
+    for w in body[2:2 + full]:
+        take(w, 14)
+    take(body[-1], rest)
+    fields, crc = [0] + bits[:-15], int("".join(map(str, bits[-15:])), 2)
+    if crc15(fields) != crc:
+        raise CanError("CRC mismatch in the received bits")
+    ident = int("".join(map(str, bits[:11])), 2)
+    data = bytes(int("".join(map(str, bits[18 + 8 * k:26 + 8 * k])), 2)
+                 for k in range(min(body[1], 8)))
+    return ident, data, True

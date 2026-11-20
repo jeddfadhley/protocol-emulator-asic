@@ -32,18 +32,20 @@ class RtlBench(HostApi):
         self.cycles = 0
         self.wires = 0xFF
 
-    async def start_clock(self):
+    async def start_clock(self, strap=0):
         # 20 ns (50 MHz) unless PEMU_CLK_NS says otherwise (sdf.mk uses it to
         # run the slow corner at a clock it meets).
         period = float(os.environ.get("PEMU_CLK_NS", "20"))
         cocotb.start_soon(Clock(self.dut.clk, period, unit="ns").start())
         d = self.dut
         d.ena.value = 1
-        d.ui_in.value = self.spi_bits
+        # ui_in[7] during reset is the v4 strap: 1 starts uo_out[6:0] high
+        d.ui_in.value = self.spi_bits | strap << 7
         d.uio_in.value = 0xFF
         d.rst_n.value = 0
         await ClockCycles(d.clk, 10)
         d.rst_n.value = 1
+        d.ui_in.value = self.spi_bits
         cocotb.start_soon(self._pins())
         cocotb.start_soon(self._half_clock())
 

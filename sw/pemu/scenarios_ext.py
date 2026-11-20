@@ -367,4 +367,61 @@ async def can_busy(b):
     assert not other.errors and not listener.errors, other.errors + listener.errors
 
 
-EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy]
+# ----- CAN receiver (v4) -----
+
+CAN_RX_BIT = 50     # can_rx: CLKDIV = 0, 50 ticks per bit: 1 Mbit/s
+
+
+def can_rx_cfg():
+    return EngineConfig(clkdiv=0, set_base=CAN_TXD, set_count=1, in_base=CAN_RXD,
+                        jmp_pin=CAN_RXD, push_thresh=14, pull_thresh=4, crc_in=True,
+                        crc_poly=can.CRC15_POLY << 1, timeout=19)
+
+
+async def can_rx_run(b, node, give_up_after_error=False):
+    """Start can_rx (its words go to the packet RAM by DMA), connect `node`
+    to the bus, let it send everything, and return the frames the chip
+    reported. A CAN sender repeats a frame that failed; with
+    give_up_after_error the node drops it after the first try instead."""
+    await b.write(A_PIN_SET, 1 << CAN_TXD)               # TXD idles recessive ...
+    await b.write(A_PIN_OE, 1 << CAN_TXD)                # ... before it is driven
+    await b.setup(0, program("can_rx"), 0, can_rx_cfg())
+    await b.dma(0, 0, 127, rx=True)
+    await b.start(1)
+    node.idle_bits = 0                                   # it must see 11 idle bits first
+    b.ui(CanBus(CAN_TXD, [node]), CAN_RXD - 8)
+    sent = len(node.queue)
+    if give_up_after_error:
+        await b.run_until(lambda: node.errors, limit=200 * CAN_RX_BIT)
+        node.queue.pop(0)
+    await b.run_until(lambda: not node.queue and node.phase is None, limit=sent * 200 * CAN_RX_BIT)
+    await b.run(4 * CAN_RX_BIT)
+    addr, _ = await b.dma_state(0)
+    return can.rx_split(await b.ram_read(0, addr))
+
+
+async def can_rx(b):
+    """v4: the chip receives CAN frames and acknowledges them itself. The
+    sender sees every frame acknowledged; the host gets every bit."""
+    frames = [(0x123, b"PEMU"), (0x000, b"\x00\x00\xff\xff\x00"), (0x7FF, b""),
+              (0x555, bytes(range(8))), (0x0F0, b"\x7f"), (0x3E0, b"\xff" * 8)]
+    tx = CanNode(CAN_RX_BIT, tx_queue=frames, ack=False, name="tx")
+    got = await can_rx_run(b, tx)
+    assert tx.acked == [True] * len(frames), tx.acked
+    assert [can.rx_decode(f)[:2] for f in got] == frames, got
+    assert not tx.errors, tx.errors
+
+
+async def can_rx_bad_crc(b):
+    """v4: a frame with a wrong CRC is reported as an error and not
+    acknowledged; the next good frame is received normally."""
+    frames = [(0x2A5, b"\x01\x02", False, True), (0x2A5, b"\x01\x02")]
+    tx = CanNode(CAN_RX_BIT, tx_queue=frames, ack=False, name="tx")
+    got = await can_rx_run(b, tx, give_up_after_error=True)
+    assert tx.acked == [False, True], tx.acked
+    assert got[0][-1] == can.RX_ERROR, got
+    assert can.rx_decode(got[1])[:2] == (0x2A5, b"\x01\x02"), got
+    assert tx.errors == ["tx: CRC error"], tx.errors     # the sender's own check of frame 1
+
+
+EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy, can_rx, can_rx_bad_crc]

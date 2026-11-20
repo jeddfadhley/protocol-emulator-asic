@@ -27,7 +27,7 @@ ENGINE_FIELDS = [
     ("crc", "crc"), ("armed", "armed"), ("edge_lvl", "edge_lvl"), ("to_cnt", "to_cnt"),
     ("time", "time_cnt"), ("divcnt", "divcnt"), ("stalled", "stalled"),
     ("timed_out", "timed_out"), ("rx_ovf", "rx_ovf"), ("tx_ovf", "tx_ovf"),
-    ("pop_armed", "pop_armed"),
+    ("pop_armed", "pop_armed"), ("wake", "wake"), ("annul", "annul"),
 ]
 
 
@@ -148,7 +148,10 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
     """Apply `script` (register writes), then random traffic, comparing the
     RTL with the model every clock. `toggle` = (pin mask, probability) makes
     those input pins change often; `quiet_bus` keeps the host idle."""
-    model = Core()
+    # Strap (v4): ui_in[7] (pin 15) during reset sets uo_out's starting level
+    strap = int(rng.random() < 0.3)
+    model = Core(strap)
+    coverage[f"strap{strap}"] += 1
 
     dut.rst_n.value = 0
     dut.bus_we.value = 0
@@ -156,7 +159,7 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
     dut.bus_rc.value = 0
     dut.bus_addr.value = 0
     dut.bus_wdata.value = 0
-    dut.pins_ext.value = 0
+    dut.pins_ext.value = strap << 15
     await ClockCycles(dut.clk, 2)
     # Inputs change 1 ns before each falling edge, not on it. On the chip the
     # bus comes from rising-edge registers and is steady by then, and the
@@ -220,6 +223,17 @@ async def run_lockstep(dut, rng, script, cycles, coverage, name, toggle=None, qu
                     coverage["wait_any_edge" if ins & 8 else "wait_edge"] += 1
                 if e.diff and ins >> 13 in (0b011, 0b101, 0b111):
                     coverage["diff_pin_ops"] += 1
+                # v4: skip, wake, add
+                pin_now = model.pin_in()
+                if ins >> 13 == 7 and (ins >> 5) & 7 == 6:
+                    taken = e.cond(ins & 31, pin_now, model.flags)
+                    coverage["skip_taken" if taken else "skip_not_taken"] += 1
+                if ins >> 13 == 7 and (ins >> 5) & 7 == 5:
+                    coverage["wake_armed"] += 1
+                if ins >> 13 == 1 and e.wake and e.cond(e.wake, pin_now, model.flags):
+                    coverage["wait_woken"] += 1
+                if ins >> 13 == 5 and (ins >> 3) & 3 == 3 and (ins >> 5) & 7 in (1, 2):
+                    coverage["add"] += 1
 
         before = [(e.pc, e.stalled, e.timed_out) for e in model.engines]
         dma_before = list(model.dma)
@@ -256,7 +270,8 @@ async def test_lockstep_random(dut):
     for op in (0, 1, 2, 3, 4, 5, 7):
         assert coverage[f"op{op}"] > 0, f"opcode {op} never executed"
     for item in ("wait_any_edge", "wait_edge", "diff_pin_ops", "dma0_tx", "dma0_rx",
-                 "dma1_tx", "dma1_rx", "late_pins"):
+                 "dma1_tx", "dma1_rx", "late_pins", "skip_taken", "skip_not_taken",
+                 "wake_armed", "wait_woken", "add", "strap0", "strap1"):
         assert coverage[item] > 0, f"{item} never exercised"
 
 
@@ -314,6 +329,16 @@ FEATURES = [
                   "mov pins, ~x side 1 [1]\nmov pins, x late side 0"),
     ("diff_side", ".side_set 2 pindirs\nset pins, 1 side 1\nmov pins, ~x side 2\nout pindirs, 1 side 3\n"
                   "set pindirs, 0 side 0\nout pins, 1 side 1"),
+    # v4: wake (every condition kind), skip across the wrap, add
+    ("wake", "wake pin\nwait 1 pin {k}\nin pins, 2\nwake !flag {k}\nwait 0 edge {k} timeout\n"
+             "set flag, {k}\nwake txdata\nwait any edge {k}\nwake x<y [1]\nwait 1 gpio {k} timeout\n"
+             "push noblock\nwake rxfull\nwait 0 flag {k}\npull noblock\nwake osre\nwait 1 pin 0\n"
+             "clr flag, {k}\njmp y--, 0"),
+    ("skip", "skip x<y\nmov x, x + y\nskip xodd\nskip !pin\nmov y, y + time\nskip x==y\n"
+             "set x, {k}\nskip xneg [1]\nmov y, y + pins\nskip !flag {k}\nskip osre\nout x, 3\n"
+             "skip txdata\nmov x, ~x\nskip rxfull\nin y, 4"),
+    ("add", "mov x, x + y\nmov y, y + x\nmov x, x + time\nmov y, ~y\nmov y, y + isr\n"
+            "mov x, x + osr\nmov y, y + crc\nmov x, x + pins\nmov y, y + null\nin x, 5\nout y, 3"),
 ]
 
 
@@ -346,5 +371,6 @@ async def test_lockstep_features(dut):
                                toggle=(0xFFFF, 0.3), quiet_bus=(trial % 2 == 0))
     assert coverage["late_pins"] > 100, coverage["late_pins"]
     dut._log.info(f"feature coverage: {dict(sorted(coverage.items()))}")
-    for item in ("wait_any_edge", "wait_edge", "diff_pin_ops"):
+    for item in ("wait_any_edge", "wait_edge", "diff_pin_ops", "skip_taken",
+                 "skip_not_taken", "wait_woken", "add"):
         assert coverage[item] > 0, item

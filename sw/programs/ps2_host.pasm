@@ -1,20 +1,22 @@
 .program ps2_host
 ; PS/2 host (keyboard or mouse port), both directions.
-; Written after the hardware was frozen: see docs/new-protocols.md.
+; Written after the v3 hardware was frozen: see docs/new-protocols.md.
+; v4: the idle loop waits for "CLK low or data from the host" with `wake`,
+; instead of polling both.
 ;
 ; The device drives the clock (10-16.7 kHz). Both lines are open drain with
 ; pull-ups: PIN_OUT stays 0 and the program drives directions.
 ; One tick = 1 us: CLKDIV = 49 at 50 MHz.
 ; Pins: DATA = in_base + 0 = out_base = set_base, CLK = DATA + 1 = jmp_pin.
-; Config: set_count = 2, out_right, in_right, X = 0, TIMEOUT = 15000
+; Config: set_count = 2, out_right, in_right, TIMEOUT = 15000
 ; (a device must start clocking within 10 ms of a request to send).
 ;
 ; Device to host: each 11-bit frame pushes one word with the start bit at
 ; [5], the byte at [13:6], odd parity at [14] and the stop bit at [15].
 ; Host to device: write ~(byte | parity << 8 | 1 << 9) & 0x3FF | 0x8000
-; (the bits inverted because 1 drives the line low; bit 15 marks a real
-; word). When the device acknowledges, a word 0x0000 is pushed (0x8000 if
-; it did not). Neither can be a received frame, whose bits [14:6] always
+; (the bits inverted because 1 drives the line low; bit 15 is a marker
+; kept from v3, which polled with `pull noblock` and needed it). When the
+; device acknowledges, a word 0x0000 is pushed (0x8000 if it did not). Neither can be a received frame, whose bits [14:6] always
 ; hold a 1 because the parity is odd.
 ; A frame that stops halfway (no clock edge for TIMEOUT) traps and is dropped.
 .trap resync
@@ -22,7 +24,9 @@ resync:
     set pindirs, 0              ; release both lines
     mov isr, null
 idle:
-    jmp pin, check_tx           ; CLK high: the bus is idle
+    wake txdata                 ; v4: the next wait also ends when the host has data
+    wait 0 pin 1                ; CLK low (the device starts a frame) or data to send
+    jmp pin, send               ; CLK still high: it was the host's data
     set y, 9                    ; CLK low: the device is sending a frame
     in pins, 1                  ; start bit (DATA is valid while CLK is low)
 rx_bit:
@@ -33,10 +37,8 @@ rx_bit:
     wait 1 pin 1 timeout        ; the end of the stop bit's clock pulse
     push
     jmp idle
-check_tx:
-    pull noblock                ; OSR = a word to send, or X = 0
-    mov y, osr
-    jmp !y, idle
+send:
+    pull                        ; the word to send (bit 15 is ignored)
     set pindirs, 2  [31]        ; inhibit: CLK low for 1 + 32 + 4 x 32 = 161 us
     set y, 3
 inhibit:
