@@ -176,6 +176,9 @@ bit-banged SPI from MicroPython.
 | `can_tx.pasm` | CAN transmitter: arbitration by read-back, timeout as bus-idle detector |
 | `can_rx.pasm` | v4: CAN receiver that checks the CRC and acknowledges frames: add, skip, the OSR count as a counter, constant-time paths |
 | `spi_device.pasm` | v4: the chip as an SPI peripheral (an emulated sensor); `wake pin` drops a transfer the controller cuts short |
+| `quadrature.pasm` | v4: rotary encoder decoder; four states, each waits on one input with `wake` on the other; X is the position |
+| `dht22.pasm` | v4: DHT22 temperature/humidity sensor; pulses timed with `mov x, ~time` / `mov x, x + time`, classified with `skip` |
+| `dmx_rx.pasm` | DMX512 lighting fixture: break detection by timeout, keeps M channels from address N |
 
 The last five were written after the hardware was frozen, as a test of how
 flexible it is: see [new-protocols.md](new-protocols.md).

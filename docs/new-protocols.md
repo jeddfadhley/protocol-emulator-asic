@@ -184,6 +184,21 @@ aligned. The scenarios `spi_device` (replies from the TX FIFO, then 0xFF)
 and `spi_device_abort` (a transfer cut off after 12 bits) cover it; with
 the `wake` lines removed, `spi_device_abort` fails.
 
+## v4: more protocols
+
+Three more were written for v4, each with a device model that follows the
+real part's timing:
+
+| Protocol | Program | Instructions | Uses | Scenarios |
+|----------|---------|-------------:|------|-----------|
+| Rotary encoder (x4 quadrature) | [`quadrature.pasm`](../sw/programs/quadrature.pasm) | 37 | `wake` on the other input, add to count up and down | `encoder` (turned both ways), `encoder_fast` (an edge every 12 clocks) |
+| DHT22 / AM2302 sensor | [`dht22.pasm`](../sw/programs/dht22.pasm) | 19 | pulse timing with TIME and add, `skip x>=y` / `skip x<y` to pick the bit, timeout trap | `dht22` (two readings, negative temperature), `dht22_absent` (no sensor, then one) |
+| DMX512 fixture | [`dmx_rx.pasm`](../sw/programs/dmx_rx.pasm) | 27 | break found by a timeout or a low stop bit, address filtering | `dmx_rx` (channels 5-8 from two frames) |
+
+With the `wake` lines removed, the encoder scenarios fail; with the `skip`
+lines removed, `dht22` fails. DMX needed nothing new: it is here because it
+is a protocol people ask a protocol emulator for.
+
 CAN receiver limits: it acknowledges standard data frames. Remote and extended frames
 have a different layout; their CRC check fails, so they are reported as
 errors and never acknowledged (any other node on the bus acknowledges them).

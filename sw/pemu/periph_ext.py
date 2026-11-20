@@ -725,3 +725,150 @@ class SpiController:
                 return getattr(ctl, self.attr)
 
         return Port("cs", True), Port("sck", False), Port("mosi", False)
+
+
+class _Ports:
+    """Helper for devices that drive several ui pins: one port per pin. The
+    first port steps the device; the others report its outputs."""
+
+    @staticmethod
+    def make(dev, attrs):
+        class Port:
+            def __init__(self, attr, lead):
+                self.attr, self.lead = attr, lead
+
+            def step(self, wires):
+                if self.lead:
+                    dev.step(wires)
+                return getattr(dev, self.attr)
+
+        return [Port(a, k == 0) for k, a in enumerate(attrs)]
+
+
+class QuadratureEncoder:
+    """A rotary encoder on two ui pins. `moves` is a list of signed step
+    counts; one step (one edge of A or B) every `period` clocks. Clockwise
+    (positive) is AB = 00, 10, 11, 01. ports() gives (A, B)."""
+
+    SEQ = [(0, 0), (1, 0), (1, 1), (0, 1)]
+
+    def __init__(self, moves, period=24):
+        self.moves, self.period = list(moves), period
+        self.phase = 0
+        self.position = 0
+        self.a, self.b = self.SEQ[0]
+        self.go = False
+        self.done = False
+        self.t = 0
+
+    def step(self, wires):
+        if not self.go or self.done:
+            return
+        self.t += 1
+        if self.t % self.period:
+            return
+        while self.moves and self.moves[0] == 0:
+            self.moves.pop(0)
+        if not self.moves:
+            self.done = True
+            return
+        d = 1 if self.moves[0] > 0 else -1
+        self.moves[0] -= d
+        self.phase = (self.phase + d) % 4
+        self.position += d
+        self.a, self.b = self.SEQ[self.phase]
+
+    def ports(self):
+        return _Ports.make(self, ["a", "b"])
+
+
+class Dht22:
+    """A DHT22 / AM2302 sensor on an open-drain GPIO (a GPIO device). It
+    answers a start signal (the line held low for at least 500 us) with an
+    80 us low, an 80 us high and 40 bits: 50 us low, then high for 27 us
+    (a 0) or 70 us (a 1). `us` is clocks per microsecond."""
+
+    def __init__(self, pin, us, humidity=652, temperature=-101, present=True):
+        self.pin, self.us = pin, us
+        t = abs(temperature) | (0x8000 if temperature < 0 else 0)   # sign and magnitude
+        data = [humidity >> 8, humidity & 255, t >> 8, t & 255]
+        self.bytes = data + [sum(data) & 255]
+        self.present = present
+        self.readings = 0
+        self.errors = []
+        self.prev, self.fell, self.t = 1, None, 0
+        self.plan = None          # list of (until_time, pull_low)
+
+    def step(self, wires):
+        us, t = self.us, self.t
+        v = bit(wires, self.pin)
+        low = False
+        if self.plan:
+            while self.plan and t >= self.plan[0][0]:
+                self.plan.pop(0)
+            low = bool(self.plan) and self.plan[0][1]
+        else:
+            if self.prev == 1 and v == 0:
+                self.fell = t
+            if self.prev == 0 and v == 1 and self.fell is not None:
+                if t - self.fell >= 500 * us and self.present:
+                    self._answer(t)
+                elif t - self.fell < 500 * us:
+                    self.errors.append(f"start signal only {(t - self.fell) / us:.0f} us")
+                self.fell = None
+        self.prev = v
+        self.t += 1
+        return int(low) << self.pin
+
+    def _answer(self, t):
+        us = self.us
+        plan, now = [], t + 30 * us
+        plan.append((now, False))
+        for dur, lo in [(80, True), (80, False)]:
+            now += dur * us
+            plan.append((now, lo))
+        for byte in self.bytes:
+            for i in range(8):
+                one = (byte >> (7 - i)) & 1
+                now += 50 * us
+                plan.append((now, True))
+                now += (70 if one else 27) * us
+                plan.append((now, False))
+        now += 50 * us
+        plan.append((now, True))
+        self.plan = plan
+        self.readings += 1
+
+
+class DmxController:
+    """A DMX512 controller on one ui pin (through an RS-485 receiver).
+    `frames` are lists of slot values (slot 0 = start code). `bit` is
+    clocks per bit (200 at 50 MHz for the real 250 kbit/s)."""
+
+    def __init__(self, frames, bit, break_bits=23, mab_bits=3, gap_bits=0):
+        self.level = 1
+        self.go, self.done = False, False
+        self.plan = self._plan(frames, bit, break_bits, mab_bits, gap_bits)
+
+    def _plan(self, frames, bit, break_bits, mab_bits, gap_bits):
+        for _ in range(4 * bit):
+            yield 1
+        for slots in frames:
+            for _ in range(break_bits * bit):
+                yield 0
+            for _ in range(mab_bits * bit):
+                yield 1
+            for v in slots:
+                for b in [0] + [(v >> i) & 1 for i in range(8)] + [1, 1] + [1] * gap_bits:
+                    for _ in range(bit):
+                        yield b
+            for _ in range(5 * bit):
+                yield 1
+        self.done = True
+        while True:
+            yield 1
+
+    def step(self, wires):
+        if self.go:
+            self.level = next(self.plan)
+        return self.level

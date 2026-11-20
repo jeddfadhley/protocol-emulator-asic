@@ -8,8 +8,9 @@ import os
 from .asm import assemble_file
 from .host import EngineConfig
 from .model import A_PIN_OE, A_PIN_SET
-from .periph_ext import (CanBus, CanNode, NecRemote, OneWireDevice, Ps2Keyboard, SpiController,
-                         SwdTarget, crc8_maxim, odd_parity)
+from .periph_ext import (CanBus, CanNode, Dht22, DmxController, NecRemote, OneWireDevice,
+                         Ps2Keyboard, QuadratureEncoder, SpiController, SwdTarget, crc8_maxim,
+                         odd_parity)
 from .swdhost import SwdError, SwdHost
 from . import can
 
@@ -466,4 +467,107 @@ async def spi_device_abort(b):
     assert got == [0xC3, 0x5A, 0x81], got               # the half byte was dropped
 
 
-EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy, can_rx, can_rx_bad_crc, spi_device, spi_device_abort]
+# ----- rotary encoder (v4) -----
+
+ENC_A = 8           # ui_in[0]; B = ui_in[1]
+
+
+async def encoder_run(b, moves, period):
+    enc = QuadratureEncoder(moves, period)
+    for k, port in enumerate(enc.ports()):              # A, B
+        b.ui(port, ENC_A - 8 + k)
+    cfg = EngineConfig(in_base=ENC_A, jmp_pin=ENC_A + 1)
+    await b.setup(0, program("quadrature"), 0, cfg)
+    await b.start(1)
+    await b.run(100)
+    enc.go = True
+    await b.run_until(lambda: enc.done, limit=200_000)
+    await b.run(40)
+    x = await b.read(0x40 + 9, pop=False)               # engine 0's X: the position
+    return enc, x - 0x10000 if x & 0x8000 else x
+
+
+async def encoder(b):
+    """v4: a rotary encoder turned both ways. The chip's count (X) matches
+    the knob: add counts, wake catches whichever input changes."""
+    enc, pos = await encoder_run(b, [37, -50, 5, -1, 1], period=24)
+    assert pos == enc.position == -8, (pos, enc.position)
+
+
+async def encoder_fast(b):
+    """v4: edges every 12 clocks (4 MHz of edges at 50 MHz): none missed."""
+    enc, pos = await encoder_run(b, [64, -3, 20], period=12)
+    assert pos == enc.position == 81, (pos, enc.position)
+
+
+# ----- DHT22 sensor (v4) -----
+
+DHT_PIN = 2         # uio[2], with a pull-up
+DHT_US = 5          # tests run 10x faster than real time: CLKDIV = 4
+
+
+def dht_cfg():
+    return EngineConfig(clkdiv=DHT_US - 1, in_base=DHT_PIN, set_base=DHT_PIN, set_count=1,
+                        autopush=True, push_thresh=8, y=48, timeout=200)
+
+
+async def dht22(b):
+    """v4: read a DHT22: 40 pulses classified by length with add and skip."""
+    sensor = b.gpio(Dht22(DHT_PIN, DHT_US, humidity=652, temperature=-101))
+    await b.setup(0, program("dht22"), 0, dht_cfg())
+    await b.start(1)
+    for _ in range(2):                                  # two readings
+        await b.push(0, 1)
+        data = await b.drain(0, 5)
+        assert data == sensor.bytes, (data, sensor.bytes)
+        assert sum(data[:4]) & 255 == data[4]
+        humidity = (data[0] << 8 | data[1]) / 10
+        raw = data[2] << 8 | data[3]
+        temp = (-(raw & 0x7FFF) if raw & 0x8000 else raw) / 10
+        assert (humidity, temp) == (65.2, -10.1), (humidity, temp)
+        await b.run(3000 * DHT_US)
+    assert sensor.readings == 2 and not sensor.errors, sensor.errors
+
+
+async def dht22_absent(b):
+    """v4: no sensor: the wait timeout ends the attempt, nothing is pushed,
+    and the next request is handled."""
+    sensor = b.gpio(Dht22(DHT_PIN, DHT_US, present=False))
+    await b.setup(0, program("dht22"), 0, dht_cfg())
+    await b.start(1)
+    await b.push(0, 1)
+    await b.run(2000 * DHT_US)
+    st = await b.status(0)
+    assert st & (1 << 12), "the attempt should have timed out"
+    assert (st >> 8) & 7 == 0, "nothing should have been pushed"
+    sensor.present = True
+    await b.push(0, 1)
+    assert await b.drain(0, 5) == sensor.bytes
+
+
+# ----- DMX512 receiver -----
+
+DMX_PIN = 10        # ui_in[2]
+DMX_DIV = 3         # tests run 6.25x faster than real time (32 clocks per bit)
+
+
+async def dmx_rx(b):
+    """A DMX512 fixture at address 5 with 4 channels: from two frames of
+    24 slots it keeps exactly channels 5-8, and finds each break."""
+    frames = [[0] + [(17 * k + 3) & 255 for k in range(1, 24)],
+              [0] + [(255 - 9 * k) & 255 for k in range(1, 24)]]
+    dmx = b.ui(DmxController(frames, bit=8 * (DMX_DIV + 1), gap_bits=1), DMX_PIN - 8)
+    cfg = EngineConfig(clkdiv=DMX_DIV, in_base=DMX_PIN, jmp_pin=DMX_PIN, in_right=True,
+                       timeout=100, crc_init=4)
+    await b.setup(0, program("dmx_rx"), 0, cfg)
+    await b.push(0, 5)                                   # start address N
+    await b.dma(0, 0, 8, rx=True)
+    await b.start(1)
+    dmx.go = True
+    await b.run_until(lambda: dmx.done, limit=400_000)
+    got = [w >> 8 for w in await b.ram_read(0, 8)]
+    assert got == frames[0][5:9] + frames[1][5:9], (got, frames[0][5:9], frames[1][5:9])
+
+
+EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy, can_rx, can_rx_bad_crc, spi_device, spi_device_abort,
+                 encoder, encoder_fast, dht22, dht22_absent, dmx_rx]

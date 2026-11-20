@@ -31,7 +31,7 @@ was used is in [docs/ai-usage.md](docs/ai-usage.md).
 | **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at 50 MHz (typical silicon; see [timing](docs/verification.md#6-physical-implementation)) |
 | **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs; every input has a 2-flop synchronizer |
 | **Host link** | SPI slave: load programs, configure, stream data, debug |
-| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX; added after the hardware freeze: 1-Wire, NEC infrared, PS/2 host, ARM SWD, CAN transmit with arbitration; with v4: a CAN receiver that acknowledges frames, and an SPI device ([docs/new-protocols.md](docs/new-protocols.md)) |
+| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX; added after the hardware freeze: 1-Wire, NEC infrared, PS/2 host, ARM SWD, CAN transmit with arbitration; with v4: a CAN receiver that acknowledges frames, SPI device, rotary encoder, DHT22 sensor, DMX512 receiver ([docs/new-protocols.md](docs/new-protocols.md)) |
 | **Timing resolution** | 10 ns on every output pin at 50 MHz (half-clock `late` writes) |
 
 ### What is new compared with RP2040 PIO and TI PRU
