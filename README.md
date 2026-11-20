@@ -66,8 +66,9 @@ at robust protocols and at being verifiable:
 - **Wait for either of two events (v4).** `wake txdata` + `wait 0 pin 1`
   ends on whichever comes first: a device starting to talk or the host
   having something to send.
-- **Safe power-up (v4).** `ui_in[7]` held high during reset starts the
-  dedicated outputs high, the idle level of UART and CAN.
+- **Safe power-up (v4).** `ui_in[7]` held high during reset (and for two
+  clocks after) starts the dedicated outputs high, the idle level of UART
+  and CAN.
 - **On-chip loopback.** One engine can drive a protocol while the other
   receives it, with no external wiring. The demo-board self-tests (UART and
   Ethernet) use this.

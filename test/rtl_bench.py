@@ -45,6 +45,12 @@ class RtlBench(HostApi):
         d.rst_n.value = 0
         await ClockCycles(d.clk, 10)
         d.rst_n.value = 1
+        if strap:
+            # The strap is read on the last clock of reset, and reset takes
+            # longer to reach every flip-flop than ui_in[7] does (the timed
+            # gate-level run showed it). Like any strap pin, hold it for a
+            # couple of clocks after releasing reset.
+            await ClockCycles(d.clk, 2)
         d.ui_in.value = self.spi_bits
         cocotb.start_soon(self._pins())
         cocotb.start_soon(self._half_clock())

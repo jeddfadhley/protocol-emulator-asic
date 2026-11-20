@@ -187,26 +187,32 @@ feature programs.
 
 The Tiny Tapeout flow (LibreLane 3.1 / OpenROAD on IHP SG13CMOS5L) hardens
 the design in an 8x4-tile slot, and CI re-runs the chip tests on the routed
-gate-level netlist. Results for v3 (commit `5eb11d5`, CI run 43934099304):
+gate-level netlist. Results for v4 (commit `4a14c97`, CI run 44773207355):
 
 | Metric | Value |
 |--------|-------|
 | DRC, LVS, antenna, TT precheck | clean (0 errors) |
 | Gate-level chip tests | pass |
-| Standard cells (placed, excluding fill) | 29,260 cells, 0.46 mm² (38% of the 1.21 mm² core) |
-| Storage | 4,096 memory latches and 1,629 flip-flops |
-| Setup slack at 50 MHz, typical (1.20 V, 25 °C) | +1.84 ns |
-| Setup slack at 50 MHz, fast (1.32 V, -40 °C) | +3.33 ns |
-| Setup slack at 50 MHz, slow (1.08 V, 125 °C) | -0.79 ns, so about 48 MHz worst case |
+| Standard cells (placed, excluding fill) | 29,128 cells, 0.46 mm² (38% of the 1.21 mm² core) |
+| Storage | 4,096 memory latches and 1,643 flip-flops |
+| Setup slack at 50 MHz, typical (1.20 V, 25 °C) | +2.55 ns |
+| Setup slack at 50 MHz, fast (1.32 V, -40 °C) | +3.76 ns |
+| Setup slack at 50 MHz, slow (1.08 V, 125 °C) | +0.48 ns: 50 MHz at every corner |
 | Hold slack (worst corner, fast) | +0.10 ns |
 | Estimated power | 10 mW |
-| Layout run time on CI | 1 h 45 min (the limit is 6 h) |
+| Layout run time on CI | 2 h 52 min (the limit is 6 h) |
 
-For comparison, v2 in the smaller 6x4 slot used 0.59 mm² of cells and 21 mW,
-and reached +2.72 ns typical but -7.86 ns (about 36 MHz) at the slow corner.
+For comparison, v3 had 29,260 cells and reached +1.84 ns typical and
+-0.79 ns (about 48 MHz) at the slow corner; v2 in the smaller 6x4 slot used
+0.59 mm² of cells and 21 mW, and reached -7.86 ns (about 36 MHz) at the slow
+corner. v4 adds about 14 flip-flops and some logic, yet came out slightly
+smaller and faster: placement and routing differ from run to run, and this
+run's worst paths happened to come out shorter. So the slow-corner margin is
+small (+0.48 ns, 2% of the clock period), not a design guarantee.
 
-The flow optimises timing at the typical corner, as is usual for Tiny
-Tapeout, so 50 MHz is the design's typical rating. All protocol firmware
+The flow repairs timing at the typical corner, as is usual for Tiny
+Tapeout, and checks setup at the typical corner only; the v4 layout also
+meets 50 MHz at the slow corner, by the small margin above. All protocol firmware
 runs at any clock by recomputing `CLKDIV`; USB low speed needs a clock that
 gives about 1.5 Mbit/s (50 MHz gives 1.515 Mbit/s, within USB's ±1.5%).
 
@@ -216,14 +222,23 @@ CI's gate-level test runs the routed netlist with zero delays, so it cannot
 see a race: two signals that change "at the same time" are resolved by the
 simulator's event order. The latch memories close on one clock edge while
 their data changes on the other, so a race there is exactly what we wanted
-to rule out. So all 40 chip tests were also run on the routed netlist with
-the layout's own delays (SDF) loaded into every cell:
+to rule out. So all 50 chip tests were also run on the routed v4 netlist
+with the layout's own delays (SDF) loaded into every cell:
 
 | Corner | Clock | Result |
 |---|---|---|
-| typical (1.20 V, 25 °C) | 50 MHz | 40 / 40 pass |
-| fast (1.32 V, -40 °C) | 50 MHz | 40 / 40 pass |
-| slow (1.08 V, 125 °C) | 45 MHz | 40 / 40 pass |
+| typical (1.20 V, 25 °C) | 50 MHz | 50 / 50 pass |
+| fast (1.32 V, -40 °C) | 50 MHz | 50 / 50 pass |
+| slow (1.08 V, 125 °C) | 50 MHz | 50 / 50 pass (also at 45 MHz) |
+
+The first v4 run found one failure at every corner, in the test bench rather
+than the chip: the reset-strap test released reset and the strap on the same
+clock edge. The strap is read on the last clock of reset, and in the real
+layout reset reaches the flip-flops later than `ui_in[7]` does, so the chip
+saw "still in reset, strap off". Like any strap pin, `ui_in[7]` must be held
+for a couple of clocks after reset is released; the test now does that, and
+the rule is in [isa.md](isa.md) and [info.md](info.md). The zero-delay
+gate-level test in CI could not see this.
 
 Checks that the setup really applies delays: an output pin changes 2.01 ns
 after the clock edge at the typical corner and 1.32 ns at the fast one (zero

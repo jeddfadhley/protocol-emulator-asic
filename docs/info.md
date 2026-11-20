@@ -38,14 +38,14 @@ The full ISA and register map are in [docs/isa.md](isa.md) in the project reposi
 |------|-----|
 | `uio[7:0]` | engine pins 0-7, bidirectional (open-drain capable) |
 | `uo_out[6:0]` | engine pins 8-14, outputs |
-| `ui_in[3:0]`, `ui_in[7]` | engine inputs (pins 8-11, 15). `ui_in[7]` is also read during reset: high starts `uo_out[6:0]` high (v4) |
+| `ui_in[3:0]`, `ui_in[7]` | engine inputs (pins 8-11, 15). `ui_in[7]` is also read during reset: high starts `uo_out[6:0]` high (v4). Hold it for 2 clocks after releasing reset |
 | `ui_in[4]`, `ui_in[5]`, `ui_in[6]`, `uo_out[7]` | host SPI: CS_N, SCK, MOSI, MISO |
 
 ## How to test
 
 Clock the design at 50 MHz. The layout meets timing at 50 MHz on typical
-silicon (1.8 ns slack at 1.2 V, 25 °C); at the worst-case corner (1.08 V,
-125 °C) it needs about 21 ns, so use 45 MHz or less if you need that margin.
+silicon (2.5 ns slack at 1.2 V, 25 °C) and also at the worst-case corner
+(1.08 V, 125 °C), where the slack is only 0.48 ns.
 The host SPI clock must be at most clk / 8.
 
 **Self-test with no external hardware.** Copy `sw/board/pemu_board.py` and `sw/board/pemu_demos.py` from

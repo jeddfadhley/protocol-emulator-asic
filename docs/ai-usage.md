@@ -89,6 +89,7 @@ happened. Each was caught by a check, not by luck.
 | v4's first `skip` jumped over the next instruction in zero ticks, so a branch's timing depended on its condition, breaking the "every path takes the same time" style the firmware relies on | writing the CAN receiver, whose sample point and ACK edge must stay on the bit grid on every path; `skip` was changed to cancel the instruction instead, before any layout run |
 | v4's tests did not exercise `x<y` with X equal to Y, so a comparison off by one would have passed | mutation testing (the `x<=y` mutant survived); a directed boundary test was added |
 | The assembler lower-cased condition names, so `skip !flag F` could not use a `.define`d flag number | assembling the CAN receiver |
+| The reset-strap test released reset and the strap on the same clock edge, which only works with zero delays: in the real layout reset arrives later than the strap | the timed gate-level simulation, at all three corners; the test now holds the strap two clocks longer, and the docs state the rule |
 
 One limit of simulation came up and is stated rather than hidden: a latch
 closing on the wrong clock edge passes every zero-delay test. The design

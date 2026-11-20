@@ -33,8 +33,9 @@ which are always driven) take the level of `ui_in[7]` while reset is held
 level of UART TX, CAN TXD and active-low chip selects, so nothing on those
 buses sees a false start bit or a dominant level before the chip is
 configured. Tie it low (or leave the demo board's switch off) for the v3
-behaviour. The strap is only read during reset; afterwards `ui_in[7]` is an
-ordinary input (pin 15). Open-drain behaviour (I2C) is done by keeping
+behaviour. The strap is read on the last clock of reset, so hold it for at least two
+clocks after releasing reset (reset takes longer than `ui_in[7]` to reach
+every flip-flop); afterwards `ui_in[7]` is an ordinary input (pin 15). Open-drain behaviour (I2C) is done by keeping
 `PIN_OUT` at 0 and toggling `PIN_OE`.
 
 **Differential pairs.** With `PINCFG.DIFF` set, every write an engine makes

@@ -83,7 +83,7 @@ Correctness rests on checks anyone can re-run, not on review.
 | **Protocol scenarios** | 50 tests run real firmware against device models that enforce each protocol's own timing rules, through the chip's real SPI pins, on the RTL and again on the routed gate-level netlist. |
 | **Formal proofs** | Cycle exactness, FIFO safety and ordering, trap behaviour, DMA rules: proven for all inputs (bounded model checking plus induction). |
 | **Mutation testing** | 59 realistic bugs planted one at a time; the tests catch all 59. This checks the tests themselves. |
-| **Timed gate-level simulation** | All 40 tests also pass on the routed netlist with its real gate delays, at all three process corners. This catches races that zero-delay simulation cannot. |
+| **Timed gate-level simulation** | All 50 tests also pass on the routed netlist with its real gate delays, at all three process corners. This catches races that zero-delay simulation cannot. |
 | **Real hardware** | The same RTL on a Basys 3 FPGA board passes the UART, USB and Ethernet self-tests. |
 | **Layout sign-off** | Tiny Tapeout CI: DRC, LVS, antenna and precheck clean. |
 
@@ -96,9 +96,9 @@ IHP 130 nm (SG13CMOS5L) through Tiny Tapeout, 8x4 tiles.
 
 | | |
 |---|---|
-| Logic | 29,260 cells, 0.46 mm², 38% of the area |
+| Logic | 29,128 cells, 0.46 mm², 38% of the area |
 | Memory | 4,096 latch bits (two 64-word program memories, a 128-word packet RAM) |
-| Speed | 50 MHz on typical silicon (+1.84 ns slack); about 48 MHz at the worst corner (1.08 V, 125 °C) |
+| Speed | 50 MHz at every corner: +2.55 ns slack on typical silicon, +0.48 ns at the worst corner (1.08 V, 125 °C) |
 | Power | about 10 mW |
 
 The layout was the hardest engineering problem. This process routes signals
@@ -106,7 +106,7 @@ on only three metal layers, and the first 8x4 layouts ran out of GitHub's
 6-hour limit while still wiring. The router's reports showed the memories'
 wiring was the cause. Two redesigns fixed it: each engine got its own
 program memory with one read port, and all memories became latch arrays,
-half the size of flip-flops. The final layout takes 1 h 45 min.
+half the size of flip-flops. The v4 layout takes 2 h 52 min.
 Details: [verification.md, sections 6 and 7](verification.md#6-physical-implementation).
 
 ## 6. Limitations
@@ -122,8 +122,8 @@ Details: [verification.md, sections 6 and 7](verification.md#6-physical-implemen
   as a device.
 - **Ethernet** is half duplex, with frames up to 124 bytes received and 117
   sent.
-- **50 MHz is a typical-silicon rating.** At the worst corner, use 45 MHz or
-  less.
+- **The worst-corner timing margin is small** (+0.48 ns at 1.08 V, 125 °C).
+  For extra safety in hot, low-voltage conditions, use 45 MHz.
 - **Not yet tried with outside equipment:** a laptop's Ethernet port, or the
   sensors and transceivers for the five newer protocols. The board driver for
   the Tiny Tapeout demo board has run only against the model.
