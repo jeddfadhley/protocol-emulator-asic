@@ -652,3 +652,76 @@ class CanBus:
         self.level = level
         self.node_tx = [n.step(level) for n in self.nodes]
         return level
+
+
+class SpiController:
+    """An SPI controller (mode 0, MSB first) driving a chip that acts as the
+    device. `frames` is a list of byte lists, each sent with one CS_N low
+    period; a frame given as (bytes, n_bits) stops after n_bits (an aborted
+    transfer). Received MISO bytes go to `received`, one list per frame.
+    Connect with ports(): (CS_N, SCK, MOSI) devices for bench.ui(). It
+    holds CS_N high until `go` is set, so the chip can be set up first."""
+
+    def __init__(self, miso_pin, frames, half=16, gap=40):
+        self.miso = miso_pin
+        self.half, self.gap = half, gap
+        self.frames = list(frames)
+        self.received = []
+        self.cs, self.sck, self.mosi = 1, 0, 0
+        self.t = 0
+        self._plan = self._run()
+        self.done = False
+        self.go = False
+
+    def _run(self):
+        while not self.go:
+            yield
+        for frame in self.frames:
+            if isinstance(frame, tuple):
+                data, nbits = frame
+            else:
+                data, nbits = frame, 8 * len(frame)
+            yield from self._wait(self.gap)
+            self.cs = 0
+            got, cur = [], 0
+            bits = [(b >> (7 - i)) & 1 for b in data for i in range(8)][:nbits]
+            for k, bit in enumerate(bits):
+                self.mosi = bit
+                yield from self._wait(self.half)
+                self.sck = 1
+                wires = yield
+                cur = cur << 1 | ((wires >> self.miso) & 1)
+                if k % 8 == 7:
+                    got.append(cur)
+                    cur = 0
+                yield from self._wait(self.half - 1)
+                self.sck = 0
+            yield from self._wait(self.half)
+            self.cs = 1
+            self.received.append(got)
+        yield from self._wait(self.gap)
+        self.done = True
+        while True:
+            yield
+
+    def _wait(self, n):
+        for _ in range(n):
+            yield
+
+    def step(self, wires):
+        self._plan.send(wires) if self.t else next(self._plan)
+        self.t += 1
+
+    def ports(self):
+        ctl = self
+
+        class Port:
+            def __init__(self, attr, lead):
+                self.attr, self.lead = attr, lead
+
+            def step(self, wires):
+                if self.lead:
+                    ctl.step(wires)
+                return getattr(ctl, self.attr)
+
+        return Port("cs", True), Port("sck", False), Port("mosi", False)

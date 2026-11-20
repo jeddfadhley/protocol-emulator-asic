@@ -25,13 +25,13 @@ was used is in [docs/ai-usage.md](docs/ai-usage.md).
 
 | | |
 |---|---|
-| **Engines** | 2, each with X/Y, 16-bit in/out shift registers, 4-word TX/RX FIFOs, clock divider, side-set, CRC unit, timestamp counter |
+| **Engines** | 2, each with X/Y, 16-bit in/out shift registers, 4-word TX/RX FIFOs, clock divider, side-set, CRC unit, timestamp counter, add and compare |
 | **Program memory** | 64 x 16-bit words per engine; programs up to 64 instructions, relocatable |
 | **Packet RAM + DMA** | 128 x 16-bit words; one DMA channel per engine streams frames at wire speed |
 | **Timing** | every instruction takes exactly `1 + delay` ticks; tick = `CLKDIV + 1` clocks at 50 MHz (typical silicon; see [timing](docs/verification.md#6-physical-implementation)) |
 | **Pins** | 8 bidirectional (open-drain capable), 7 outputs, 5 inputs; every input has a 2-flop synchronizer |
 | **Host link** | SPI slave: load programs, configure, stream data, debug |
-| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX; added after the hardware freeze: 1-Wire, NEC infrared, PS/2 host, ARM SWD, CAN transmit with arbitration ([docs/new-protocols.md](docs/new-protocols.md)) |
+| **Firmware included** | UART TX/RX, SPI master, I2C master, WS2812, SD CMD + CRC7, edge timestamping, USB low-speed TX and RX (sniffer), 10BASE-T Ethernet TX/RX; added after the hardware freeze: 1-Wire, NEC infrared, PS/2 host, ARM SWD, CAN transmit with arbitration; with v4: a CAN receiver that acknowledges frames, and an SPI device ([docs/new-protocols.md](docs/new-protocols.md)) |
 | **Timing resolution** | 10 ns on every output pin at 50 MHz (half-clock `late` writes) |
 
 ### What is new compared with RP2040 PIO and TI PRU
@@ -58,6 +58,16 @@ at robust protocols and at being verifiable:
   one bit (10BASE-T, RS-485), and `wait any edge` re-locks a receiver's
   timing on every transition, which is how `eth_rx` decodes Manchester at
   only 5 samples per bit.
+- **Constant-time conditionals (v4).** `skip <cond>` cancels the next
+  instruction, but the cancelled instruction still takes its tick and drives
+  its side-set, so both outcomes of a branch take the same time. PIO's
+  conditional jumps are also single-cycle, but have far fewer conditions;
+  PEMU's include X < Y, X == Y, FIFO levels and any event flag.
+- **Wait for either of two events (v4).** `wake txdata` + `wait 0 pin 1`
+  ends on whichever comes first: a device starting to talk or the host
+  having something to send.
+- **Safe power-up (v4).** `ui_in[7]` held high during reset starts the
+  dedicated outputs high, the idle level of UART and CAN.
 - **On-chip loopback.** One engine can drive a protocol while the other
   receives it, with no external wiring. The demo-board self-tests (UART and
   Ethernet) use this.
@@ -113,7 +123,7 @@ at robust protocols and at being verifiable:
   netlist in CI.
 - **Formal proofs** (BMC + k-induction) of cycle exactness, FIFO safety and
   ordering, trap behaviour, and that nothing moves between ticks.
-- **Mutation testing.** All 48 deliberately planted RTL bugs are caught.
+- **Mutation testing.** All deliberately planted RTL bugs are caught (59 in v4).
 - **Runs on real hardware:** the same RTL on a Basys 3 FPGA passes the
   UART, USB and Ethernet self-tests and 100/100 Ethernet frames (tested
   with v2; v3's larger program memory has not been on the board yet).
@@ -171,8 +181,8 @@ Ethernet wiring.
   injects USB traffic, but does not enumerate as a device.
 - Ethernet frames are limited to 124 bytes received and 117 sent by the
   packet RAM, and the link is half duplex with no collision detection.
-- No ALU: arithmetic is done on the host, and firmware branches on bits with
-  `out x, 1` / `jmp !x`.
+- Arithmetic is add and compare only (v4); heavier arithmetic (CRC-32, IP
+  checksums) runs on the host.
 - The MicroPython board driver is tested against the model but has not yet
   run on silicon or an FPGA.
 

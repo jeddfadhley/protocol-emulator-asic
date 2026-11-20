@@ -37,6 +37,11 @@ just tested. Around the engines:
 - **Differential outputs and any-edge waits**, which is how about 30
   instructions of firmware speak 10BASE-T Ethernet with no Ethernet hardware
   on the chip.
+- **Compare, add and wait-for-either (v4).** `skip <cond>` cancels the next
+  instruction when a condition holds (X < Y, X == Y, FIFO levels, a pin, a
+  flag), and the cancelled instruction still takes its tick, so a branch
+  costs the same time either way and the timing rule above still holds.
+  `mov x, x + src` adds. `wake <cond>` lets a wait end on a second event.
 
 A host (the Tiny Tapeout board's RP2040, or a PC) loads programs and moves
 data over SPI. Protocol layers that need arithmetic (Ethernet's CRC-32, ARP,
@@ -53,14 +58,19 @@ hardware, then added five protocols that played no part in its design:
 1-Wire, NEC infrared remotes, a PS/2 keyboard host, ARM's Serial Wire Debug
 and CAN transmit with arbitration. **All five fitted without changing the
 hardware.** Four needed only ordinary firmware; CAN transmit fitted, but a
-full CAN receiver does not, because it needs counting the engines cannot do.
-That gap, and three others, became a short list of the next hardware
-changes, and one of them (more program memory) is now built.
+full CAN receiver did not, because it needs counting the engines could not
+do.
+
+That test produced a short, specific list of hardware gaps, and v3 and v4
+closed all four: more program memory (v3); then compare and add, waiting for
+either of two events, and a safe power-up level for the outputs (v4). The
+proof is the CAN receiver: with v4 it fits in exactly 64 instructions,
+checks the CRC on the chip and acknowledges frames on the bus itself.
 Details: [new-protocols.md](new-protocols.md).
 
 Firmware included today: UART, SPI, I2C, WS2812 LEDs, SD-card commands, edge
 timestamping, USB low-speed send and sniff, 10BASE-T Ethernet (ping and UDP),
-and the five above.
+the five above, and with v4 a CAN receiver and an SPI device.
 
 ## 4. How we know it works
 
@@ -100,8 +110,12 @@ Details: [verification.md, sections 6 and 7](verification.md#6-physical-implemen
 
 ## 6. Limitations
 
-- **No arithmetic unit.** Firmware branches on bits; counting and comparing
-  happen on the host. This is why a CAN receiver does not fit.
+- **Arithmetic is minimal**: add, compare, and the CRC unit. There is no
+  multiply, logic operation or shift between registers; firmware builds
+  them from add and the shift registers (`mov x, x + x` doubles), and
+  anything heavier (CRC-32, IP checksums) runs on the host.
+- **The CAN receiver** acknowledges standard data frames only, and does not
+  send error frames.
 - **USB** is low speed only, and the chip sends and sniffs packets but cannot
   answer a USB host within the bus turnaround time, so it does not enumerate
   as a device.

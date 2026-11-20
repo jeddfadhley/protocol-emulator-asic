@@ -174,6 +174,8 @@ bit-banged SPI from MicroPython.
 | `ps2_host.pasm` | PS/2 host, both directions: device-driven clock; v4 waits for "clock or host data" with `wake` |
 | `swd.pasm` | ARM Serial Wire Debug as a general half-duplex shifter ([`swdhost.py`](../sw/pemu/swdhost.py)) |
 | `can_tx.pasm` | CAN transmitter: arbitration by read-back, timeout as bus-idle detector |
+| `can_rx.pasm` | v4: CAN receiver that checks the CRC and acknowledges frames: add, skip, the OSR count as a counter, constant-time paths |
+| `spi_device.pasm` | v4: the chip as an SPI peripheral (an emulated sensor); `wake pin` drops a transfer the controller cuts short |
 
 The last five were written after the hardware was frozen, as a test of how
 flexible it is: see [new-protocols.md](new-protocols.md).

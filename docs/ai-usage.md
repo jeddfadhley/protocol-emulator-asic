@@ -25,8 +25,9 @@ files. Their part was direction and the things a person has to do:
 
 - choosing to enter and setting the goal (a complete, verified entry);
 - the decisions that shape the project: accepting the 8x4-tile allocation,
-  asking for a blind test of protocols added after the hardware freeze, and
-  asking for the larger program memory;
+  asking for a blind test of protocols added after the hardware freeze,
+  asking for the larger program memory, freezing the chip, and later
+  reopening it for v4 (keeping the frozen v3 as a fallback);
 - running the design on real hardware: flashing the Basys 3 FPGA board and
   running its self-tests, which no AI can do;
 - the GitHub account, the competition correspondence and the submission.
@@ -85,6 +86,8 @@ happened. Each was caught by a check, not by luck.
 | Three mutations had silently stopped applying after an RTL change, so "43/43 caught" covered 43 of 46 | the mutation runner's "SKIP" lines, now part of the review |
 | The latch memory added a half-clock path that failed timing at the slow corner | the layout's timing report |
 | A script that watched for CI results queried the wrong workflow name, so a failed layout went unreported for two days | noticing that the script never printed a run ID |
+| v4's first `skip` jumped over the next instruction in zero ticks, so a branch's timing depended on its condition, breaking the "every path takes the same time" style the firmware relies on | writing the CAN receiver, whose sample point and ACK edge must stay on the bit grid on every path; `skip` was changed to cancel the instruction instead, before any layout run |
+| The assembler lower-cased condition names, so `skip !flag F` could not use a `.define`d flag number | assembling the CAN receiver |
 
 One limit of simulation came up and is stated rather than hidden: a latch
 closing on the wrong clock edge passes every zero-delay test. The design

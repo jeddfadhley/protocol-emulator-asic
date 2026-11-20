@@ -8,7 +8,8 @@ import os
 from .asm import assemble_file
 from .host import EngineConfig
 from .model import A_PIN_OE, A_PIN_SET
-from .periph_ext import CanBus, CanNode, NecRemote, OneWireDevice, Ps2Keyboard, SwdTarget, crc8_maxim, odd_parity
+from .periph_ext import (CanBus, CanNode, NecRemote, OneWireDevice, Ps2Keyboard, SpiController,
+                         SwdTarget, crc8_maxim, odd_parity)
 from .swdhost import SwdError, SwdHost
 from . import can
 
@@ -424,4 +425,45 @@ async def can_rx_bad_crc(b):
     assert tx.errors == ["tx: CRC error"], tx.errors     # the sender's own check of frame 1
 
 
-EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy, can_rx, can_rx_bad_crc]
+# ----- SPI device (v4) -----
+
+SPID_MISO = 0       # uio[0]
+SPID_MOSI = 8       # ui_in[0]; SCK = ui_in[1], CS_N = ui_in[2]
+
+
+async def spi_device_run(b, frames, replies):
+    cfg = EngineConfig(clkdiv=0, out_base=SPID_MISO, set_base=SPID_MISO, set_count=1,
+                       in_base=SPID_MOSI, jmp_pin=SPID_MOSI + 2, autopush=True,
+                       push_thresh=8, x=0xFF00)
+    await b.setup(0, program("spi_device"), 0, cfg)
+    ctl = SpiController(SPID_MISO, frames)              # connected (CS_N high) before
+    for k, port in enumerate(ctl.ports()):              # the engine starts: CS_N, SCK, MOSI
+        b.ui(port, (SPID_MOSI - 8) + (2, 1, 0)[k])
+    for r in replies:
+        await b.push(0, r << 8)
+    await b.dma(0, 0, 64, rx=True)                      # received bytes go to the packet RAM
+    await b.start(1)
+    ctl.go = True
+    await b.run_until(lambda: ctl.done, limit=200_000)
+    addr, _ = await b.dma_state(0)
+    return ctl, await b.ram_read(0, addr)
+
+
+async def spi_device(b):
+    """v4: the chip as an SPI device. It answers from the TX FIFO (then 0xFF
+    when that runs dry) and pushes every byte it receives."""
+    ctl, got = await spi_device_run(b, [[0x9F, 0x11, 0x22, 0x33], [0x05, 0x00]], [0xA5, 0x3C, 0x0F])
+    assert ctl.received == [[0xA5, 0x3C, 0x0F, 0xFF], [0xFF, 0xFF]], ctl.received
+    assert got == [0x9F, 0x11, 0x22, 0x33, 0x05, 0x00], got
+
+
+async def spi_device_abort(b):
+    """v4: the controller deselects in the middle of a byte. `wake pin` ends
+    the clock wait, the partial byte is dropped, and the next transfer is
+    received aligned."""
+    ctl, got = await spi_device_run(b, [([0xC3, 0xFF], 12), [0x5A, 0x81]], [0x12, 0x34, 0x56])
+    assert ctl.received == [[0x12], [0x56, 0xFF]], ctl.received   # 0x34 was cut off
+    assert got == [0xC3, 0x5A, 0x81], got               # the half byte was dropped
+
+
+EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy, can_rx, can_rx_bad_crc, spi_device, spi_device_abort]

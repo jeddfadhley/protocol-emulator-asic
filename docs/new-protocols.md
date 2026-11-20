@@ -138,20 +138,63 @@ next hardware changes:
 
 1. **A small add/compare unit** would let firmware count stuff bits and
    field lengths (a CAN receiver), check parity on the chip, and compare
-   times.
+   times. *Done in v4:* `mov x, x + src` adds, and `skip <cond>` compares
+   (`x<y`, `x==y`, sign, odd, FIFO levels, any flag). See the CAN receiver
+   below.
 2. **Waiting on either of two conditions** would remove the PS/2 polling
-   loop and cut its reaction time to one tick.
+   loop and cut its reaction time to one tick. *Done in v4:* `wake txdata`
+   before a `wait` ends it on either event; `ps2_host` now uses it.
 3. **A configurable reset level for `uo_out`** would make every output pin
-   safe for buses that must idle high.
+   safe for buses that must idle high. *Done in v4:* `ui_in[7]` held high
+   during reset starts `uo_out[6:0]` high.
 4. **More program memory**: the PS/2 host already uses 29 of the 32 words one
    engine can have. *Done in v3:* each engine now has its own 64-word memory
    and programs can be 64 instructions long (see below).
+
+## v4: the CAN receiver that did not fit
+
+With v4's instructions, [`can_rx.pasm`](../sw/programs/can_rx.pasm) is a
+full CAN 2.0A receiver in exactly 64 instructions. Per bit it re-syncs on
+falling edges, removes stuff bits, feeds the data bits to the CRC unit and
+counts them. When the DLC arrives it computes where the CRC ends
+(8 × min(DLC, 8) + 15 bits, with three `mov x, x + x` and one `skip x<y`),
+checks that the CRC register is 0 and the CRC delimiter recessive, and then
+drives the ACK slot itself. The host only collects the bits (by DMA into the
+packet RAM) and a status word per frame.
+
+Two things made it fit. First, the OSR's bit count works as a second
+counter: the program never shifts data through the OSR, so `out null, 1`
+counts a run of equal bits and `jmp !osre` (with `PULL_THRESH = 4`) asks
+"fewer than 5?". Second, because a skipped instruction still takes its
+tick, every path through a bit takes the same time, which is what keeps
+the sample point and the ACK edge on the bit grid.
+
+| Scenario | What it shows |
+|----------|---------------|
+| `can_rx` | six frames at 1 Mbit/s (0-8 data bytes, heavy stuffing, all-ones and all-zeros), each acknowledged by the chip; the sender checks that the ACK edge lands within 2 clocks of its bit grid |
+| `can_rx_bad_crc` | a frame with one wrong CRC bit is reported as an error and not acknowledged; the next frame is received normally |
+
+**Waiting for either of two events** is the other v4 gap, and the clearest
+use is an SPI *device*: [`spi_device.pasm`](../sw/programs/spi_device.pasm)
+lets the chip play the part an SPI controller talks to, such as an emulated
+sensor. Every wait for a clock edge is preceded by `wake pin` (JMP_PIN =
+chip select), so if the controller deselects in the middle of a byte the
+wait ends at once, the half byte is dropped and the next transfer starts
+aligned. The scenarios `spi_device` (replies from the TX FIFO, then 0xFF)
+and `spi_device_abort` (a transfer cut off after 12 bits) cover it; with
+the `wake` lines removed, `spi_device_abort` fails.
+
+CAN receiver limits: it acknowledges standard data frames. Remote and extended frames
+have a different layout; their CRC check fails, so they are reported as
+errors and never acknowledged (any other node on the bus acknowledges them).
+It does not send error frames.
 
 ## Running them on real hardware
 
 Divide the clock for real time: 1-Wire and PS/2 use 1 µs ticks
 (CLKDIV = 49 at 50 MHz), NEC uses 70.3 µs ticks (CLKDIV = 3514), SWD CLKDIV =
-1, and CAN CLKDIV = 1 / 3 / 7 / 15 for 1 Mbit/s / 500 / 250 / 125 kbit/s. The
+1, and CAN CLKDIV = 1 / 3 / 7 / 15 for 1 Mbit/s / 500 / 250 / 125 kbit/s
+(`can_rx`: 0 / 1 / 3 / 7). The
 tests run 1-Wire, NEC and PS/2 faster than real time (each program's timing
 is in ticks, so this scales cleanly) to keep simulations short.
 
