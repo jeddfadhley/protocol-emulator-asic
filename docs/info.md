@@ -22,6 +22,10 @@ more) are firmware, so new protocols can be added after the chip is made.
   detection, presence detect); a CRC unit for any polynomial up to 16 bits; edge-triggered waits; a
   timestamp counter; relocatable programs; single-step debugging; and an **on-chip loopback mode**, in which
   one engine can test the other with no external hardware.
+- **Compare, add and wait-for-either (v4):** `skip <cond>` cancels the next instruction when a
+  condition holds (X < Y, X == Y, a pin, a flag, FIFO levels) while keeping its time slot, so branches
+  stay constant-time; `mov x, x + src` adds; `wake <cond>` lets a wait also end on a second event. With
+  these, a CAN receiver that checks the CRC and acknowledges frames fits in 64 instructions.
 - **Packet RAM and DMA:** 128 words and one DMA channel per engine, so frames stream at wire speed.
 - **USB low-speed sniffer:** records and decodes USB keyboard/mouse traffic (firmware + ring-buffer DMA).
 - **Half-clock pin timing:** 10 ns output resolution at 50 MHz.
