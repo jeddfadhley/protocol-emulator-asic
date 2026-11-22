@@ -21,6 +21,8 @@ on IHP 130 nm CMOS5L through [Tiny Tapeout](https://tinytapeout.com), in an
 8x4-tile allocation. **Start with the [write-up](docs/writeup.md)**; how AI
 was used is in [docs/ai-usage.md](docs/ai-usage.md).
 
+![PEMU block diagram](docs/figures/block-diagram.svg)
+
 ## Highlights
 
 | | |
@@ -126,8 +128,9 @@ at robust protocols and at being verifiable:
   ordering, trap behaviour, and that nothing moves between ticks.
 - **Mutation testing.** All deliberately planted RTL bugs are caught (59 in v4).
 - **Runs on real hardware:** the same RTL on a Basys 3 FPGA passes the
-  UART, USB and Ethernet self-tests and 100/100 Ethernet frames (tested
-  with v2; v3's larger program memory has not been on the board yet).
+  UART, USB and Ethernet self-tests (v4, 2026-11-22), and a lockstep run on
+  the board matches the Python model register for register over 18,000
+  single-stepped ticks of random and v4-feature programs.
 - **Layout signed off** in Tiny Tapeout CI: DRC, LVS, antenna and precheck
   clean, with the chip tests re-run on the gate-level netlist. Locally they
   also pass with the layout's real gate delays at all three process corners.

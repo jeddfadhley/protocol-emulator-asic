@@ -242,3 +242,48 @@ def test_cli_usb_sniff_decodes_a_keyboard(link):
 def test_cli_usb_selftest(link):
     rc, out = run(["usb-selftest"], link)
     assert rc == 0 and "PASSED" in out, out
+
+
+def test_cli_lockstep(link):
+    rc, out = run(["lockstep", "--programs", "10", "--ticks", "40"], link)
+    assert rc == 0 and "PASSED: 400 ticks" in out, out
+
+
+def test_lockstep_catches_a_broken_chip():
+    """The board check must notice a chip that differs from the model: here a
+    model whose skip never cancels anything stands in for the board."""
+    import types
+    from pemu import hwcheck, model
+    src = open(model.__file__).read()
+    assert "self.annul = int(skip)" in src
+    broken = types.ModuleType("broken_model")
+    exec(compile(src.replace("self.annul = int(skip)", "self.annul = 0"), "broken_model", "exec"),
+         broken.__dict__)
+    def broken_chip():
+        chip = hwcheck.ModelChip()
+        chip.host.core = broken.Core()
+        return chip
+    with pytest.raises(AssertionError, match="tick"):
+        hwcheck.run(broken_chip(), programs=8, ticks=60, log=lambda s: None)
+
+
+def test_lockstep_reruns_a_program_after_a_link_error():
+    """A lost USB reply reruns that program pair from reset; it is not
+    counted as a match or a mismatch."""
+    from pemu import hwcheck
+    chip = hwcheck.ModelChip()
+    calls = {"reads": 0}
+    real_read = chip.read
+
+    def flaky_read(addr, n=1):
+        calls["reads"] += 1
+        if calls["reads"] == 500:
+            raise ConnectionError("lost reply")
+        return real_read(addr, n)
+    chip.read = flaky_read
+
+    def reset():
+        chip.host.core.reset()
+    n, retries = hwcheck.run(chip, programs=4, ticks=50, log=lambda s: None, reset=reset,
+                             link_errors=(ConnectionError,))
+    assert n == 200 and retries == 1

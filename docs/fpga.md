@@ -129,6 +129,7 @@ Ethernet commands:
 |---------|--------------|
 | `python3 -m pemu.fpga usb-selftest` | engine 0 sends USB low-speed packets from the packet RAM, engine 1 records and decodes them, inside the chip; no wiring needed |
 | `python3 -m pemu.fpga eth-selftest` | sends a 10BASE-T frame from engine 0 to engine 1 inside the chip; no wiring needed |
+| `python3 -m pemu.fpga lockstep` | runs random programs (and directed ones for skip, wake and add) on the board and on the Python model, one tick at a time, and compares every engine register, the pins and the flags after each tick. About 5 minutes; `--seed N` for other programs |
 | `python3 -m pemu.fpga eth-send "hello"` | broadcasts a UDP packet (port 7777, from 192.168.7.2). Add `--count 10` to send several, one per second. Watch them arrive in Wireshark on the laptop. |
 | `python3 -m pemu.fpga eth-serve` | PEMU becomes 192.168.7.2 and answers ARP, ping and UDP echo (port 7). Every received frame is printed. Ctrl-C stops it. |
 
@@ -345,6 +346,16 @@ docker run --rm -v "$PWD":/work -w /work/fpga/basys3 regymm/openxc7 make
   the on-chip 10BASE-T loopback (about 80 ms per round trip, mostly USB
   latency). With the half-clock pins and USB receiver added, the same tests
   pass again, and `usb-selftest` decodes every USB packet sent on-chip.
+- **v4 on a real Basys 3** (2026-11-22): `check` reads version 4; the
+  UART, USB and Ethernet self-tests pass; and `lockstep` passes with seeds
+  1, 2 and 3: 120 program pairs (24 directed at skip, wake and add, 96
+  random over the whole instruction encoding), 18,000 single-stepped ticks,
+  every register equal to the Python model after every tick. Each program
+  pair starts from reset and writes all 64 words of both program memories,
+  because reset clears the chip's latch memories but not the FPGA's LUT RAM
+  (the first version of the check missed this and reported false
+  differences). If USB loses a reply, that pair is rerun from reset and
+  the retry is reported.
 - **Not yet tried:** Ethernet to a real laptop through an RJ45 jack (the
   signal levels), UART
   output to a USB-serial adapter, I2C and WS2812 devices.

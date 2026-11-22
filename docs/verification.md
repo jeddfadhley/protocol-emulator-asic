@@ -55,6 +55,12 @@ levels and sticky flags.
   and directions).
 - CI runs 150 random seeds x 3000 clocks plus the directed programs, about
   700,000 compared clocks. Local runs of 200+ seeds have passed.
+- **On the FPGA:** `python3 -m pemu.fpga lockstep` (`sw/pemu/hwcheck.py`)
+  does the same comparison against a Basys 3 board. The engines are
+  single-stepped with `CTRL.STEP` in loopback, so the result does not depend
+  on USB timing or on what is plugged in, and engine registers, pins and
+  flags are read back after every tick. v4 passed 18,000 ticks (120 program
+  pairs over three seeds, including the skip/wake/add programs above).
 
 ```
 cd test && make TB=core COSIM_SEEDS=200 COSIM_CYCLES=3000

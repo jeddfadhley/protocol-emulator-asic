@@ -64,8 +64,9 @@ result in these documents comes from a tool, not from the AI's say-so.
   and the numbers in [verification.md](verification.md) are copied from CI
   reports, with the run ID.
 - **Real hardware.** The same RTL runs on a Basys 3 FPGA board, where the
-  owner ran the UART, USB and Ethernet self-tests and 100 out of 100
-  Ethernet frames got through.
+  UART, USB and Ethernet self-tests pass, 100 out of 100 Ethernet frames got
+  through (v2), and v4 matches the Python model register for register over
+  18,000 single-stepped ticks (`python3 -m pemu.fpga lockstep`).
 
 ## Where the AI was wrong, and what caught it
 
@@ -90,6 +91,7 @@ happened. Each was caught by a check, not by luck.
 | v4's tests did not exercise `x<y` with X equal to Y, so a comparison off by one would have passed | mutation testing (the `x<=y` mutant survived); a directed boundary test was added |
 | The assembler lower-cased condition names, so `skip !flag F` could not use a `.define`d flag number | assembling the CAN receiver |
 | The reset-strap test released reset and the strap on the same clock edge, which only works with zero delays: in the real layout reset arrives later than the strap | the timed gate-level simulation, at all three corners; the test now holds the strap two clocks longer, and the docs state the rule |
+| The first FPGA lockstep check assumed reset clears the program memories. It does on the chip, but not on the FPGA, so leftover instructions showed up as false differences | the check itself, on the board; it now writes every word before each program |
 
 One limit of simulation came up and is stated rather than hidden: a latch
 closing on the wrong clock edge passes every zero-delay test. The design

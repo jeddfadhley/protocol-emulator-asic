@@ -21,6 +21,7 @@ Command line (run from the sw/ directory):
     python3 -m pemu.fpga eth-serve          answer ping/ARP/UDP echo as 192.168.7.2
     python3 -m pemu.fpga usb-selftest       USB send + sniff, on-chip
     python3 -m pemu.fpga usb-sniff          decode USB low-speed traffic (e.g. a keyboard)
+    python3 -m pemu.fpga lockstep           compare the board with the Python model, tick by tick
 
 Add --port /dev/tty.usbserial-XXXX1 if auto-detection picks the wrong port.
 pyserial (pip3 install pyserial) is only needed to talk to real hardware.
@@ -331,6 +332,33 @@ def _ip(s):
     return parts
 
 
+def cmd_lockstep(args, out):
+    from . import hwcheck
+    link = args.open_link()
+    link.reset()
+    chip = pemu_board.Pemu(link)
+    chip.check()
+    try:
+        n, retries = hwcheck.run(chip, seed=args.seed, programs=args.programs,
+                                 ticks=args.ticks, reset=lambda: _relink(link),
+                                 link_errors=(LinkError,),
+                                 log=lambda s: print(s, file=out, flush=True))
+    except AssertionError as e:
+        print(f"PEMU lockstep FAILED: {e}", file=out)
+        return 1
+    note = f" ({retries} program(s) rerun after a lost USB reply)" if retries else ""
+    print(f"PEMU lockstep PASSED: {n} ticks, every register equal to the model{note}",
+          file=out)
+    return 0
+
+
+def _relink(link):
+    """Recover the bridge after a lost byte, then reset PEMU."""
+    link._pending = 0
+    link._sync()
+    link.reset()
+
+
 def build_parser():
     p = argparse.ArgumentParser(prog="python3 -m pemu.fpga",
                                 description="Control PEMU on a Basys 3 FPGA board.")
@@ -371,6 +399,11 @@ def build_parser():
     us.add_argument("--packets", type=int, default=None, help="stop after this many shown")
     us.add_argument("--polls", type=int, default=None, help="stop after this many polls")
     us.set_defaults(func=cmd_usb_sniff)
+    ls = sub.add_parser("lockstep", help="compare the board with the Python model, tick by tick")
+    ls.add_argument("--seed", type=int, default=1)
+    ls.add_argument("--programs", type=int, default=40)
+    ls.add_argument("--ticks", type=int, default=150)
+    ls.set_defaults(func=cmd_lockstep)
     return p
 
 

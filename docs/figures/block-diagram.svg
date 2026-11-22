@@ -1,0 +1,77 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400" font-family="-apple-system, 'Segoe UI', Helvetica, Arial, sans-serif" font-size="13">
+  <title>PEMU block diagram</title>
+  <defs>
+    <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#59636e"/>
+    </marker>
+  </defs>
+  <rect width="800" height="400" fill="#ffffff"/>
+
+  <!-- chip outline -->
+  <rect x="150" y="14" width="636" height="372" rx="10" fill="#f6f8fa" stroke="#8c959f" stroke-dasharray="6 4"/>
+  <text x="166" y="36" fill="#59636e" font-size="12">PEMU chip (Tiny Tapeout, IHP 130 nm, 50 MHz)</text>
+
+  <!-- host -->
+  <rect x="14" y="150" width="108" height="76" rx="8" fill="#ffffff" stroke="#59636e"/>
+  <text x="68" y="180" text-anchor="middle" font-weight="600" fill="#1f2328">Host</text>
+  <text x="68" y="198" text-anchor="middle" fill="#59636e" font-size="11">RP2040 or PC</text>
+  <text x="68" y="213" text-anchor="middle" fill="#59636e" font-size="11">loads programs</text>
+
+  <!-- SPI + registers -->
+  <rect x="166" y="150" width="112" height="76" rx="8" fill="#ffffff" stroke="#59636e"/>
+  <text x="222" y="180" text-anchor="middle" font-weight="600" fill="#1f2328">SPI slave</text>
+  <text x="222" y="198" text-anchor="middle" fill="#59636e" font-size="11">registers, FIFOs,</text>
+  <text x="222" y="213" text-anchor="middle" fill="#59636e" font-size="11">debug (step)</text>
+  <line x1="122" y1="188" x2="164" y2="188" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <text x="143" y="180" text-anchor="middle" fill="#59636e" font-size="11">SPI</text>
+
+  <!-- engines -->
+  <g>
+    <rect x="318" y="50" width="250" height="124" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="334" y="72" font-weight="600" fill="#0969da">Engine 0</text>
+    <text x="334" y="94" fill="#1f2328" font-size="12">64-word program memory</text>
+    <text x="334" y="112" fill="#1f2328" font-size="12">X, Y · 16-bit in/out shift registers</text>
+    <text x="334" y="130" fill="#1f2328" font-size="12">CRC unit · TIME counter · add/compare</text>
+    <text x="334" y="148" fill="#1f2328" font-size="12">4-word TX and RX FIFOs · clock divider</text>
+    <text x="334" y="166" fill="#59636e" font-size="11">every instruction: exactly 1 + delay ticks</text>
+  </g>
+  <g>
+    <rect x="318" y="192" width="250" height="76" rx="8" fill="#ddf4ff" stroke="#0969da"/>
+    <text x="334" y="214" font-weight="600" fill="#0969da">Engine 1</text>
+    <text x="334" y="236" fill="#1f2328" font-size="12">the same, with its own memory</text>
+    <text x="334" y="254" fill="#59636e" font-size="11">runs a second protocol, or the other end</text>
+  </g>
+  <line x1="278" y1="170" x2="316" y2="130" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <line x1="278" y1="206" x2="316" y2="226" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+
+  <!-- packet RAM -->
+  <rect x="318" y="296" width="250" height="70" rx="8" fill="#ffffff" stroke="#59636e"/>
+  <text x="334" y="318" font-weight="600" fill="#1f2328">Packet RAM, 128 x 16 bits</text>
+  <text x="334" y="338" fill="#1f2328" font-size="12">one DMA channel per engine</text>
+  <text x="334" y="356" fill="#59636e" font-size="11">streams frames at wire speed</text>
+  <line x1="278" y1="226" x2="316" y2="320" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <line x1="443" y1="294" x2="443" y2="270" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <path d="M 572 331 Q 600 331 600 250 Q 600 176 572 160" fill="none" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+
+  <!-- pins -->
+  <rect x="620" y="50" width="150" height="218" rx="8" fill="#ffffff" stroke="#59636e"/>
+  <text x="695" y="74" text-anchor="middle" font-weight="600" fill="#1f2328">Pins</text>
+  <text x="634" y="98" fill="#1f2328" font-size="12">2-flop input</text>
+  <text x="634" y="114" fill="#1f2328" font-size="12">synchronisers</text>
+  <text x="634" y="138" fill="#1f2328" font-size="12">differential pairs</text>
+  <text x="634" y="154" fill="#1f2328" font-size="12">(10BASE-T, RS-485)</text>
+  <text x="634" y="178" fill="#1f2328" font-size="12">half-clock outputs:</text>
+  <text x="634" y="194" fill="#1f2328" font-size="12">10 ns edge placement</text>
+  <text x="634" y="218" fill="#1f2328" font-size="12">open drain (I2C)</text>
+  <text x="634" y="242" fill="#59636e" font-size="11">8 bidirectional, 7 out,</text>
+  <text x="634" y="257" fill="#59636e" font-size="11">5 in · loopback mode</text>
+  <line x1="570" y1="112" x2="618" y2="112" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+  <line x1="570" y1="230" x2="618" y2="230" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+
+  <!-- the wire -->
+  <text x="695" y="300" text-anchor="middle" fill="#1f2328" font-size="12">UART · SPI · I2C · CAN</text>
+  <text x="695" y="318" text-anchor="middle" fill="#1f2328" font-size="12">USB · Ethernet · 1-Wire</text>
+  <text x="695" y="336" text-anchor="middle" fill="#1f2328" font-size="12">DMX · SWD · PS/2 …</text>
+  <text x="695" y="358" text-anchor="middle" fill="#59636e" font-size="11">all in firmware</text>
+  <line x1="695" y1="270" x2="695" y2="286" stroke="#59636e" stroke-width="1.5" marker-end="url(#arr)" marker-start="url(#arr)"/>
+</svg>
