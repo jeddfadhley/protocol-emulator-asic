@@ -24,6 +24,7 @@ class ModelSpi:
         self.tx_trace = []           # PEMU pin 12 (UART TX demo) after each idle clock
         self.eth = EthMonitor(0, 1)  # a link partner on the TD+/TD- pair
         self.usb = None              # optional UsbLsSource on ui_in[1] (D+), ui_in[2] (D-)
+        self.midi = None             # optional UartSource on ui_in[3] (MIDI in)
 
     def clock(self, **bus):
         """One clock with the pins wired up; returns the bus read data."""
@@ -35,6 +36,8 @@ class ModelSpi:
         if self.usb:
             dp, dm = self.usb.dp.step(wires), self.usb.dm.step(wires)
             ui = (ui & ~0b110) | dp << 1 | dm << 2
+        if self.midi:
+            ui = (ui & ~0b1000) | self.midi.step(wires) << 3
         r = c.clock(ui_in=ui, uio_in=uio, **bus)
         self.tx_trace.append(c.pin_out >> 12 & 1)
         return r
@@ -84,7 +87,9 @@ class FakeBridge:
                 self.outbuf += b"PEMU"
             elif c == ord("R"):
                 del buf[0]
+                midi = self.spi.midi         # what is plugged in stays plugged in
                 self.spi = ModelSpi()
+                self.spi.midi = midi
                 self.outbuf += b"R"
             elif c == ord("S"):
                 if len(buf) < 3:
@@ -287,3 +292,51 @@ def test_lockstep_reruns_a_program_after_a_link_error():
     n, retries = hwcheck.run(chip, programs=4, ticks=50, log=lambda s: None, reset=reset,
                              link_errors=(ConnectionError,))
     assert n == 200 and retries == 1
+
+
+def test_cli_vga(link):
+    rc, out = run(["vga"], link)
+    assert rc == 0 and "640x480" in out, out
+    assert "#" in out.splitlines()[0]            # the picture, drawn in the terminal
+    core = link.ser.spi.core
+    assert core.ctrl & 3 == 3 and core.pin_oe & 0xFF == 0xFF
+    from pemu import vga
+    assert core.ram == vga.picture(vga.demo_picture())
+
+
+def test_cli_vga_text(link):
+    rc, out = run(["vga", "Hi", "there"], link)
+    assert rc == 0, out
+    from pemu import vga
+    assert link.ser.spi.core.ram == vga.picture(vga.text_picture(["Hi", "there"]))
+    rc, out = run(["vga", "a~b"], link)
+    assert rc == 2 and "font" in out
+
+
+def test_cli_music(link):
+    from pemu import music
+    rc, out = run(["music", "--bpm", "90"], link)
+    assert rc == 0 and "Ode to Joy" in out and "90 bpm" in out, out
+    core = link.ser.spi.core
+    words = music.song_words(music.ODE_TO_JOY)
+    assert core.ram[:len(words)] == words
+    assert core.ctrl & 3 == 3
+    assert core.engines[0].crc == music.step_crc(30 / 90)
+
+
+def test_cli_midi(link):
+    """A MIDI note-on arriving on ui_in[3] at 31,250 baud starts a note."""
+    from pemu import music
+    from pemu.periph import UartSource
+    class Keyboard(UartSource):              # plays once the synth is loaded
+        t = 0
+        def step(self, wires):
+            self.t += 1
+            if self.t == 30_000:
+                self.queue += [0x90, 69, 100]
+            return super().step(wires)
+    link.ser.spi.midi = Keyboard(1600)
+    rc, out = run(["midi", "--polls", "400"], link)
+    assert rc == 0 and "note 69" in out, out
+    # The tone engine got A4 (440 Hz) and then the closing rest.
+    assert link.ser.spi.core.engines[1].x in (0, music.half_period_x(69))

@@ -569,5 +569,103 @@ async def dmx_rx(b):
     assert got == frames[0][5:9] + frames[1][5:9], (got, frames[0][5:9], frames[1][5:9])
 
 
+
+
+# ----- VGA (sw/pemu/vga.py) -----
+
+async def vga(b):
+    """640x480 VGA from both engines: the first three picture rows (45 lines)
+    have exact sync timing and every pixel where a monitor expects it. The
+    full-frame check (vsync, 525 lines) is in sw/tests/test_vga.py."""
+    from . import vga as v
+    img = v.demo_picture()
+    await v.setup(b, v.picture(img), program("vga_sync"), program("vga_pixels"))
+    mon = b.monitor(v.VgaMonitor())   # from here, line 1 has the first HSYNC edge
+    await b.run(46 * v.LINE_CLOCKS)
+    rows, problems = v.first_lines(mon.samples, 44)
+    assert not problems, problems[:5]
+    want = v.expected_frame(img)
+    for y, row in enumerate(rows, start=1):
+        assert row == want[y], f"line {y}: " + str(
+            [x for x in range(640) if row[x] != want[y][x]][:10])
+
+
+# ----- Music box and MIDI synth (sw/pemu/music.py) -----
+# Fast settings for simulation: 1-clock ticks, so a "note" lasts microseconds.
+
+def _high_runs(rec, start=0):
+    """Lengths of the high pulses recorded since run index `start`."""
+    return [n for level, n in rec.runs[start:] if level == 1]
+
+
+async def music_box(b):
+    """Two engines play a song from the packet RAM with no host: every note
+    has the right pitch and length, repeated notes are separated by a gap,
+    a rest is silent, and the speaker stops after the last note."""
+    from . import music
+    from .periph import PulseRecorder
+    notes = [(20, 2), (0, 1), (33, 1), (33, 1), (47, 3)]     # (x, steps); x 0 = rest
+    words = [(steps - 1) << 12 | x for x, steps in notes] + [0]
+    step, gap = 300, 1                                         # conductor CRC, tone CRC
+    await music.music_box(b, words, program("tone"), program("conductor"),
+                          tone_cfg=music.tone_config(clkdiv=0, gap=gap),
+                          conductor_cfg=music.conductor_config(clkdiv=0, step=step))
+    rec = b.monitor(PulseRecorder(music.SPEAKER_PIN))
+    total = sum(steps * (step + 3) + 3 for _, steps in notes)
+    await b.run(total + 400)
+    # Split the recording into notes at the gaps (low runs longer than a half wave).
+    played, current = [], []
+    for level, n in rec.runs:
+        if level == 1:
+            current.append(n)
+        elif current and n > current[-1] + 1:
+            played.append(current)
+            current = []
+    if current:
+        played.append(current)
+    want = [(x, steps) for x, steps in notes if x]
+    assert [p[0] for p in played] == [x + 4 for x, _ in want], [p[:2] for p in played]
+    for p, (x, steps) in zip(played, want):
+        assert set(p) == {x + 4}, p
+        length = steps * (step + 3) + 3 - 16 * (gap + 1) - 6
+        assert abs(len(p) - length / (2 * (x + 4))) <= 1.5, (x, len(p), length / (2 * (x + 4)))
+    assert rec.level == 0 and rec.count > 200, "silent after the last note"
+
+
+async def midi_synth(b):
+    """MIDI in, sound out: note on, a second key (last-note priority),
+    releasing it falls back to the first, and note-on with velocity 0
+    silences the voice. Real-time clock bytes in between are ignored."""
+    from . import music
+    from .periph import PulseRecorder, UartSource
+    from .scenarios import UART_CPB, UART_DIV
+    tick_s = 1 / (2 * music.frequency(60) * 44)      # note 60 -> 44-tick half waves
+    rec = b.monitor(PulseRecorder(music.SPEAKER_PIN))
+    src = b.ui(UartSource(UART_CPB), music.MIDI_PIN - 8)
+    await music.midi_synth_start(b, program("tone"), program("uart_rx"),
+                                 tone_cfg=music.tone_config(clkdiv=0, gap=0),
+                                 rx_cfg=music.midi_rx_config(clkdiv=UART_DIV))
+    parser, voice = music.MidiParser(), music.MonoVoice()
+    steps = [([0x90, 60, 100], 60), ([0xF8, 64, 90], 64), ([0x80, 64, 0], 60),
+             ([0x90, 60, 0], None)]
+    for msg, expect in steps:
+        src.queue.extend(msg)
+        for byte in await b.drain(0, len(msg)):
+            for ev in parser.feed(byte):
+                note = voice.update(ev)
+                if note is not False:
+                    await music.midi_synth_play(b, note, tick_s)
+        assert voice.playing() == expect
+        mark = len(rec.runs)
+        await b.run(1200)
+        highs = _high_runs(rec, mark)[1:]
+        if expect is None:
+            assert not highs and rec.level == 0, highs
+        else:
+            assert highs and set(highs) == {music.half_period_x(expect, tick_s) + 4}, highs
+
+
+
 EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy, can_rx, can_rx_bad_crc, spi_device, spi_device_abort,
-                 encoder, encoder_fast, dht22, dht22_absent, dmx_rx]
+                 encoder, encoder_fast, dht22, dht22_absent, dmx_rx, vga,
+                 music_box, midi_synth]

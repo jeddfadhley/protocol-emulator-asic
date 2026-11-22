@@ -204,6 +204,44 @@ have a different layout; their CRC check fails, so they are reported as
 errors and never acknowledged (any other node on the bus acknowledges them).
 It does not send error frames.
 
+## After sign-off: video, music and MIDI
+
+These were written after the v4 layout was signed off, so like the first five
+they are a test of the frozen hardware, and they are further from what it was
+designed for.
+
+| Program | Instructions | What it shows | Scenarios |
+|---------|-------------:|---------------|-----------|
+| [`vga_sync.pasm`](../sw/programs/vga_sync.pasm) | 50 | VGA 640×480 at 60 Hz: 1600 clocks per line, 525 lines, both syncs, and the background colour. Flags tell the other engine when a line and a picture row begin | `vga` (45 lines, every pixel), `sw/tests/test_vga.py` (two whole frames), `test_vga_frame` on the RTL (one whole frame) |
+| [`vga_pixels.pasm`](../sw/programs/vga_pixels.pasm) | 30 | a 64×32 picture streamed from the packet RAM by a ring DMA; each 4-word row is kept in X, Y, CRC and ISR for its 15 lines | same |
+| [`tone.pasm`](../sw/programs/tone.pasm) | 13 | a square-wave instrument: each half wave is exactly (value + 4) ticks, with a short gap between notes | `music_box`, `midi_synth` |
+| [`conductor.pasm`](../sw/programs/conductor.pasm) | 6 | times each note of a song in the packet RAM and moves `tone` on with a flag | `music_box` |
+
+**VGA.** The chip has no video hardware. One tick of `vga_sync` is 8 pixels
+and one tick of `vga_pixels` is one pixel (2 clocks, a 25 MHz pixel clock),
+so the sync engine's line is 100 ticks, written as instructions whose delays
+add up to exactly 100. A picture pixel is 10 screen pixels: `out pins, 1 [8]`
+and `jmp !osre` take 10 ticks. The 16th pixel of each word would take an
+extra tick to load the next word, so `PULL_THRESH` is 15: the loop ends one
+pixel early, and the last pixel's own `out` absorbs the load. The scenario
+decodes the pins the way a monitor does (from each HSYNC edge, mid-pixel) and
+checks every pixel, the black blanking and the sync timing. One frame from
+the RTL is in [figures/vga-frame.png](figures/vga-frame.png).
+
+**Music box.** Both DMA channels stream the same song from the packet RAM,
+one word per note: a length (4 bits) and a half period (12 bits). `conductor`
+counts the length and sets flag 0; `tone` checks the flag once per wave
+period with `skip !flag 0` + `jmp`, which takes the same time either way, so
+the pitch stays exact until the note changes. With 1 µs ticks notes are in
+tune to within 2 cents up to C6.
+
+**MIDI synth.** MIDI is a UART at 31,250 baud, so `uart_rx` receives it
+unchanged (CLKDIV 199). The host turns note-on and note-off messages
+(with running status and real-time bytes) into `tone` words, with
+last-note priority. The `midi_synth` scenario sends a note, a second key,
+its release and a note-off through the chip's input pin, and checks every
+half wave that comes out.
+
 ## Running them on real hardware
 
 Divide the clock for real time: 1-Wire and PS/2 use 1 µs ticks

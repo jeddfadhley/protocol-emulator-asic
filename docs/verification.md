@@ -66,6 +66,21 @@ levels and sticky flags.
 cd test && make TB=core COSIM_SEEDS=200 COSIM_CYCLES=3000
 ```
 
+**The browser playground's simulator** ([playground](playground/index.html))
+is a JavaScript translation of the model and the assembler
+(`docs/playground/pemu.js`). `sw/tests/test_playground.py` checks it the same
+way against the Python model: 60 seeds of random programs (the lockstep
+generator above) with random inputs and random host traffic (register,
+FIFO, packet RAM, DMA and CTRL writes, reads with and without commit), 180,000
+clocks compared on every engine register, FIFO, pin, flag and the RAM; the
+assembler on every firmware file and 3,000 fuzzed sources (valid and
+invalid); and the disassembler on 20,000 random words. Bugs planted in the
+translation on purpose (a jump condition, a decrement, `skip`, the DMA ring,
+`x<y`, the delay and side-set range checks) are each caught. Every example
+the page offers also runs in node, and what its decoders read back (the
+UART text, the LED colours, every VGA picture pixel, the 62 notes of the
+music box with their pitches and lengths) is compared with the inputs.
+
 ## 3. Protocol scenarios (`sw/pemu/scenarios.py`)
 
 Real firmware from `sw/programs/` runs against independent device models
@@ -102,6 +117,9 @@ Each scenario runs twice with identical code:
 | `eth_ping` | a laptop model sends ARP and ping; the host code answers through the chip |
 | `usb_ls_rx`, `_slow`, `_fast` | a USB device model (its own encoder, ±1.2% clock, keep-alives) sends 7 packets; the sniffer's ring buffer decodes them all |
 | `usb_loopback` | engine 0 sends USB, engine 1 sniffs it on-chip |
+| `vga` | 45 lines of 640×480 VGA from both engines: every line 1600 clocks, HSYNC 96 pixels, every pixel's colour where a monitor samples it, held for both of its clocks, and black in the blanking. Whole frames (VSYNC, 525 lines) are checked on the model (`sw/tests/test_vga.py`) and once on the RTL (`VGA_FRAME=... make TESTCASE=test_vga_frame`: one frame, pixel for pixel equal to the model) |
+| `music_box` | a song from the packet RAM, timed by one engine and played by the other: every note's half period exact, its length, the gap between repeated notes, a rest, silence at the end |
+| `midi_synth` | MIDI at 31,250 baud (scaled) into `uart_rx`, the host parser, last-note priority and note-off: every half wave on the speaker pin |
 
 The USB receiver also has a tolerance test (`sw/tests/test_usb.py`, on the
 model): it decodes every packet with the sender's clock off by up to ±4%, at
@@ -236,6 +254,11 @@ with the layout's own delays (SDF) loaded into every cell:
 | typical (1.20 V, 25 °C) | 50 MHz | 50 / 50 pass |
 | fast (1.32 V, -40 °C) | 50 MHz | 50 / 50 pass |
 | slow (1.08 V, 125 °C) | 50 MHz | 50 / 50 pass (also at 45 MHz) |
+
+The three scenarios written after sign-off (`vga`, `music_box`,
+`midi_synth`) were then run the same way on the same netlist, and pass at
+all three corners at 50 MHz, so the chip's real gates produce the VGA
+signal and the music exactly as the model does.
 
 The first v4 run found one failure at every corner, in the test bench rather
 than the chip: the reset-strap test released reset and the strap on the same

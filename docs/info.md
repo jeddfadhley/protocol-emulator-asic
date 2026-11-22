@@ -75,11 +75,18 @@ RD+/RD- through a comparator into `ui_in[0]`), give the laptop the address 192.1
 `chip = pemu_board.Pemu(pemu_board.TTBoardSpi()); chip.eth_start(); chip.eth_serve()`, then
 `ping 192.168.7.2`.
 
+**VGA picture:** plug a TinyVGA Pmod into the `uio` header and run
+`pemu_board.Pemu(pemu_board.TTBoardSpi()).vga()`: 640x480 at 60 Hz, a 64x32 picture
+from the packet RAM. `vga(words)` shows your own (128 words, 4 per row).
+
+**Music box:** a piezo buzzer, or the input of a powered speaker, on `uio[7]` through a 1 kΩ resistor,
+then `.music()`: the chip plays a tune from the packet RAM on its own.
+
 **Writing your own protocol:** write a program (see `sw/programs/*.pasm`), assemble it with
 `python3 -m pemu.asm prog.pasm`, then load the words into instruction memory over SPI.
 
 ## External hardware
 
 None for the self-tests. For protocol demos: a USB-serial adapter (UART), a WS2812 LED strip on `uo_out[5]`,
-an I2C device on `uio[4]` (SDA) and `uio[5]` (SCL) with pull-up resistors, or for Ethernet an RJ45 jack
-with magnetics, two resistors and a comparator.
+an I2C device on `uio[4]` (SDA) and `uio[5]` (SCL) with pull-up resistors, a TinyVGA Pmod and a monitor,
+a piezo buzzer, or for Ethernet an RJ45 jack with magnetics, two resistors and a comparator.

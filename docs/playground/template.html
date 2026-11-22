@@ -1,0 +1,912 @@
+<title>PEMU Playground</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Program the two protocol engines of the PEMU Tiny Tapeout chip in your browser and watch the pins, cycle by cycle.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<style>
+/* Layout: a bench. Example strip on top, then the program (left) beside
+   the instruments that read the pins (right); one column on phones. */
+:root {
+  --bg: #f5f7f9;
+  --panel: #ffffff;
+  --ink: #1f2328;
+  --muted: #59636e;
+  --line: #d4dbe2;
+  --accent: #0969da;
+  --accent-ink: #ffffff;
+  --accent-soft: #ddf4ff;
+  --trace: #0969da;
+  --trace-fill: rgba(9, 105, 218, 0.10);
+  --grid: #e6ebf0;
+  --ok: #1a7f37;
+  --bad: #cf222e;
+  --code-bg: #fbfcfd;
+  --c-comment: #6e7781;
+  --c-kw: #8250df;
+  --c-num: #0550ae;
+  --c-label: #953800;
+  --c-dir: #116329;
+  --pc-line: rgba(255, 196, 0, 0.28);
+  --err-line: rgba(207, 34, 46, 0.14);
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-head: "IBM Plex Sans Condensed", "IBM Plex Sans", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117; --panel: #151b23; --ink: #e6edf3; --muted: #9198a1; --line: #2f3742;
+    --accent: #4493f8; --accent-ink: #0d1117; --accent-soft: #10284a; --trace: #58a6ff;
+    --trace-fill: rgba(88, 166, 255, 0.14); --grid: #222a33; --ok: #3fb950; --bad: #f85149;
+    --code-bg: #0f141a; --c-comment: #8b949e; --c-kw: #d2a8ff; --c-num: #79c0ff;
+    --c-label: #ffa657; --c-dir: #7ee787; --pc-line: rgba(255, 196, 0, 0.20);
+    --err-line: rgba(248, 81, 73, 0.18); color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117; --panel: #151b23; --ink: #e6edf3; --muted: #9198a1; --line: #2f3742;
+  --accent: #4493f8; --accent-ink: #0d1117; --accent-soft: #10284a; --trace: #58a6ff;
+  --trace-fill: rgba(88, 166, 255, 0.14); --grid: #222a33; --ok: #3fb950; --bad: #f85149;
+  --code-bg: #0f141a; --c-comment: #8b949e; --c-kw: #d2a8ff; --c-num: #79c0ff;
+  --c-label: #ffa657; --c-dir: #7ee787; --pc-line: rgba(255, 196, 0, 0.20);
+  --err-line: rgba(248, 81, 73, 0.18); color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink); font-family: var(--font-body); font-size: 15px;
+  line-height: 1.5; padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 0 48px;
+}
+.wrap { max-width: 1320px; margin: 0 auto; }
+h1, h2, h3 { font-family: var(--font-head); font-weight: 600; text-wrap: balance; margin: 0; }
+a { color: var(--accent); }
+button, input, select { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+/* header */
+.top { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between;
+  gap: 8px 24px; padding-block: 22px 14px; }
+.brand { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.brand h1 { font-size: 26px; letter-spacing: -0.01em; }
+.brand p { margin: 0; color: var(--muted); }
+.top nav { display: flex; gap: 18px; font-size: 14px; }
+
+/* example strip */
+.examples { display: flex; gap: 8px; flex-wrap: wrap; padding-block: 4px 16px; }
+.ex { border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
+  padding: 6px 14px; cursor: pointer; font-size: 14px; }
+.ex:hover { border-color: var(--accent); }
+.ex[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+
+/* intro + run bar */
+.intro { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 14px 28px;
+  align-items: end; padding-block: 0 16px; }
+.intro p { margin: 0; max-width: 70ch; }
+.intro .note { color: var(--muted); font-size: 13.5px; margin-top: 6px; }
+.inputs { display: flex; flex-wrap: wrap; gap: 10px 16px; margin-top: 12px; }
+.inputs label { display: grid; gap: 3px; font-size: 12.5px; color: var(--muted);
+  letter-spacing: 0.02em; }
+.inputs input { border: 1px solid var(--line); background: var(--panel); border-radius: 6px;
+  padding: 6px 9px; min-width: 0; width: 16em; max-width: 100%; color: var(--ink); font-size: 14px; }
+.runbar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; justify-content: flex-end; }
+.btn { border: 1px solid var(--line); background: var(--panel); border-radius: 6px;
+  padding: 7px 13px; cursor: pointer; font-size: 14px; white-space: nowrap; }
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent);
+  font-weight: 600; padding-inline: 20px; }
+.btn:disabled { opacity: 0.5; cursor: default; }
+.status { font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums;
+  min-height: 1.5em; text-align: right; grid-column: 1 / -1; }
+.status.err { color: var(--bad); }
+progress { width: 120px; height: 8px; accent-color: var(--accent); }
+
+/* main grid */
+.bench { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 7fr); gap: 16px; align-items: start; }
+@media (max-width: 1080px) { .bench, .intro { grid-template-columns: minmax(0, 1fr); } .runbar { justify-content: flex-start; } .status { text-align: left; } }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.panel > header { display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 10px 14px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+.panel h2 { font-size: 15px; letter-spacing: 0.04em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.section { padding: 12px 14px; border-bottom: 1px solid var(--line); min-width: 0; }
+.section:last-child { border-bottom: 0; }
+.section h3 { font-size: 13px; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted);
+  margin-bottom: 8px; font-weight: 600; }
+
+/* engine tabs */
+.tabs { display: flex; gap: 4px; }
+.tab { border: 1px solid transparent; background: none; border-radius: 6px; padding: 4px 10px;
+  cursor: pointer; font-size: 13.5px; color: var(--muted); }
+.tab[aria-selected="true"] { border-color: var(--line); color: var(--ink); background: var(--bg); }
+.tab .pname { font-family: var(--font-mono); font-size: 12px; margin-left: 4px; }
+
+/* editor */
+.editor { position: relative; display: grid; grid-template-columns: auto minmax(0, 1fr);
+  background: var(--code-bg); font-family: var(--font-mono); font-size: 13px; line-height: 20px;
+  height: 420px; border-bottom: 1px solid var(--line); }
+.gutter { overflow: hidden; color: var(--muted); text-align: right; user-select: none;
+  border-right: 1px solid var(--line); font-size: 11.5px; padding-block: 8px; }
+.gutter div { height: 20px; padding-inline: 8px 6px; white-space: pre; font-variant-numeric: tabular-nums; }
+.gutter .w { color: var(--c-num); opacity: 0.75; }
+.gutter .pc { background: var(--pc-line); color: var(--ink); }
+.gutter .err { background: var(--err-line); color: var(--bad); }
+.codebox { position: relative; overflow: hidden; min-width: 0; }
+.codebox pre, .codebox textarea { position: absolute; inset: 0; margin: 0; padding: 8px 10px;
+  font: inherit; line-height: inherit; white-space: pre; tab-size: 4; border: 0; }
+.codebox pre { pointer-events: none; color: var(--ink); overflow: hidden; }
+.codebox textarea { background: transparent; color: transparent; caret-color: var(--ink);
+  resize: none; outline: none; overflow: auto; width: 100%; height: 100%; }
+.codebox textarea::selection { background: var(--accent-soft); color: transparent; }
+.codebox .ln { display: block; height: 20px; }
+.codebox .ln.pc { background: var(--pc-line); }
+.codebox .ln.err { background: var(--err-line); }
+.hl-c { color: var(--c-comment); font-style: italic; }
+.hl-k { color: var(--c-kw); font-weight: 500; }
+.hl-n { color: var(--c-num); }
+.hl-l { color: var(--c-label); }
+.hl-d { color: var(--c-dir); }
+.asm { padding: 8px 14px; font-size: 13px; font-family: var(--font-mono); color: var(--muted);
+  border-bottom: 1px solid var(--line); min-height: 37px; overflow-wrap: anywhere; }
+.asm.ok::before { content: "✓ "; color: var(--ok); }
+.asm.err { color: var(--bad); }
+
+/* settings */
+details.settings > summary { cursor: pointer; padding: 10px 14px; font-size: 13px; letter-spacing: 0.05em;
+  text-transform: uppercase; color: var(--muted); font-weight: 600; list-style-position: inside; }
+.cfg { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px 14px; padding: 4px 14px 14px; }
+.cfg label { display: grid; gap: 2px; font-size: 12px; color: var(--muted); }
+.cfg input[type=number] { border: 1px solid var(--line); border-radius: 5px; padding: 4px 7px; width: 100%;
+  background: var(--bg); color: var(--ink); font-family: var(--font-mono); font-size: 13px; }
+.cfg .check { display: flex; align-items: center; gap: 6px; font-size: 13px; color: var(--ink); }
+.cfg .wide { grid-column: 1 / -1; font-size: 12px; color: var(--muted); }
+
+/* outputs */
+.screen { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; justify-items: start; }
+.screen canvas { width: 100%; max-width: 640px; aspect-ratio: 4 / 3; image-rendering: pixelated;
+  border-radius: 6px; background: #000; border: 6px solid #2a2f36; }
+.caption { font-size: 13px; color: var(--muted); }
+.caption .ok { color: var(--ok); font-weight: 600; }
+.leds { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 2px; }
+.led { display: grid; justify-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+.led i { width: 34px; height: 34px; border-radius: 50%; border: 2px solid var(--line); display: block; }
+.textout { font-family: var(--font-mono); background: var(--code-bg); border: 1px solid var(--line);
+  border-radius: 6px; padding: 8px 10px; white-space: pre-wrap; overflow-wrap: anywhere; min-height: 2.4em; }
+.notes { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 10px; font-family: var(--font-mono); font-size: 12px; }
+.notes span { border: 1px solid var(--line); border-radius: 4px; padding: 1px 6px; color: var(--muted); }
+.notes span.now { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+.empty { color: var(--muted); font-size: 14px; }
+
+/* waveform */
+.wavebar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; justify-content: space-between; margin-bottom: 8px; }
+.wavebar .group { display: flex; gap: 4px; align-items: center; }
+.wavebar .btn { padding: 3px 10px; font-size: 13px; }
+.readout { font-family: var(--font-mono); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.wave { position: relative; overflow: hidden; }
+.wave canvas { display: block; width: 100%; touch-action: pan-y; cursor: grab; }
+.wave canvas.dragging { cursor: grabbing; }
+
+/* registers */
+.regs { overflow-x: auto; }
+.regs table { border-collapse: collapse; font-size: 13px; width: 100%; font-variant-numeric: tabular-nums; }
+.regs th, .regs td { text-align: left; padding: 4px 10px 4px 0; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+.regs th { font-weight: 500; color: var(--muted); font-size: 12px; }
+.regs td { font-family: var(--font-mono); }
+.pill { display: inline-block; font-family: var(--font-body); font-size: 11.5px; padding: 0 8px; border-radius: 999px;
+  border: 1px solid var(--line); }
+.pill.run { color: var(--ok); border-color: var(--ok); }
+.pill.stall { color: #9a6700; border-color: #d4a72c; }
+.pill.off { color: var(--muted); }
+
+/* how it works */
+.how { margin-top: 28px; display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 16px 32px; }
+.how h2 { font-size: 18px; margin-bottom: 6px; }
+.how p { margin: 0 0 8px; max-width: 65ch; color: var(--ink); }
+.how .facts { font-family: var(--font-mono); font-size: 13px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<div class="wrap">
+  <header class="top">
+    <div class="brand">
+      <h1>PEMU Playground</h1>
+      <p>Program the protocol engines of a Tiny Tapeout chip and watch every pin, clock by clock.</p>
+    </div>
+    <nav><a href="#how">How it works</a><a href="https://github.com/jeddfadhley/protocol-emulator-asic" target="_blank" rel="noopener">Source on GitHub</a></nav>
+  </header>
+
+  <div class="examples" role="tablist" aria-label="Examples" id="examples"></div>
+
+  <section class="intro">
+    <div>
+      <p id="summary"></p>
+      <p class="note" id="note"></p>
+      <div class="inputs" id="inputs"></div>
+    </div>
+    <div class="runbar">
+      <progress id="progress" max="1" value="0" hidden></progress>
+      <button class="btn" id="step" title="Continue for one tick of engine 0">+1 tick</button>
+      <button class="btn" id="step100" title="Continue for 100 ticks of engine 0">+100 ticks</button>
+      <button class="btn primary" id="run">Run</button>
+    </div>
+    <div class="status" id="status" aria-live="polite"></div>
+  </section>
+
+  <div class="bench">
+    <section class="panel" aria-label="Program">
+      <header>
+        <h2>Program</h2>
+        <div class="tabs" role="tablist" id="tabs"></div>
+      </header>
+      <div class="editor">
+        <div class="gutter" id="gutter" aria-hidden="true"></div>
+        <div class="codebox">
+          <pre id="hl" aria-hidden="true"></pre>
+          <textarea id="code" spellcheck="false" autocapitalize="off" autocomplete="off" aria-label="Program source"></textarea>
+        </div>
+      </div>
+      <div class="asm" id="asm"></div>
+      <details class="settings" id="settings">
+        <summary>Engine settings</summary>
+        <div class="cfg" id="cfg"></div>
+      </details>
+    </section>
+
+    <section class="panel" aria-label="Output">
+      <header><h2>Output</h2><span class="readout" id="runinfo"></span></header>
+      <div class="section" id="out"></div>
+      <div class="section">
+        <div class="wavebar">
+          <h3 style="margin:0">Pins</h3>
+          <span class="readout" id="cursor">Drag to pan · pinch or Ctrl + scroll to zoom</span>
+          <div class="group">
+            <button class="btn" id="zin" aria-label="Zoom in">+</button>
+            <button class="btn" id="zout" aria-label="Zoom out">−</button>
+            <button class="btn" id="zfit">Fit</button>
+          </div>
+        </div>
+        <div class="wave"><canvas id="wave" height="160"></canvas></div>
+      </div>
+      <div class="section regs">
+        <h3>Registers after the run</h3>
+        <div id="regs"></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="how" id="how">
+    <div>
+      <h2>What you are running</h2>
+      <p>PEMU is a chip for the Tiny Tapeout shuttle on IHP's 130 nm process. It has two small engines, each with 64 words of program memory, that drive and read up to 16 pins. Every instruction takes exactly 1 + its delay ticks, so a program fixes the timing of a protocol down to one 20 ns clock.</p>
+      <p>The protocols are all software. This page runs real firmware from the project: serial, LEDs, VGA video and a music box, with the same register settings the board uses.</p>
+    </div>
+    <div>
+      <h2>How exact is it?</h2>
+      <p>The simulator here is a JavaScript copy of the project's Python reference model. A test runs the two side by side on random programs and random host traffic and compares every register on every clock. The Python model is in turn compared with the chip's Verilog clock by clock, and with an FPGA build tick by tick.</p>
+      <p class="facts">clock 50 MHz · 2 engines × 64 instructions · 4-word FIFOs · 128-word packet RAM with DMA · CRC unit · 8 bidirectional pins, 7 outputs, 5 inputs</p>
+    </div>
+    <div>
+      <h2>Writing programs</h2>
+      <p><code>.side_set n</code> lets every instruction also drive n pins. <code>[d]</code> adds d ticks of delay. <code>.wrap_target</code> and <code>.wrap</code> loop at no cost. <code>wait</code> stalls until a pin, an edge or a flag; <code>skip</code> cancels the next instruction but keeps its timing. The full instruction set is in <a href="https://github.com/jeddfadhley/protocol-emulator-asic/blob/main/docs/isa.md" target="_blank" rel="noopener">docs/isa.md</a>.</p>
+    </div>
+  </section>
+</div>
+
+<!-- SCRIPTS -->
+<script>
+(function () {
+  "use strict";
+  const P = window.PEMU, D = window.PEMU_DATA, PL = window.PEMU_PLAY;
+  const $ = (id) => document.getElementById(id);
+  const fmt = (n) => n.toLocaleString("en-US");
+  const hex = (v, n = 4) => "0x" + v.toString(16).padStart(n, "0");
+
+  const state = { ex: null, engine: 0, sources: [], cfgs: [], inputs: {}, session: null,
+    result: null, view: [0, 1], audio: null, running: false };
+
+  // ------------------------------------------------------------ time units
+  function timeText(clocks) {
+    const scale = state.ex && state.ex.timeScale ? state.ex.timeScale : 1;
+    const s = clocks * scale / PL.CLK_HZ;
+    if (s >= 1) return s.toFixed(3) + " s";
+    if (s >= 1e-3) return (s * 1e3).toFixed(s >= 0.1 ? 1 : 3) + " ms";
+    if (s >= 1e-6) return (s * 1e6).toFixed(s >= 1e-4 ? 1 : 2) + " µs";
+    return Math.round(s * 1e9) + " ns";
+  }
+
+  // ------------------------------------------------------------ examples
+  function buildExampleStrip() {
+    const box = $("examples");
+    PL.EXAMPLES.forEach((ex) => {
+      const b = document.createElement("button");
+      b.className = "ex"; b.setAttribute("role", "tab"); b.id = "ex-" + ex.id; b.textContent = ex.title;
+      b.setAttribute("aria-selected", "false");
+      b.onclick = () => { location.hash = ex.id; };
+      box.appendChild(b);
+    });
+  }
+
+  function selectExample(id) {
+    const ex = PL.EXAMPLES.find((e) => e.id === id) || PL.EXAMPLES[0];
+    state.ex = ex;
+    document.querySelectorAll(".ex").forEach((b) => b.setAttribute("aria-selected", String(b.id === "ex-" + ex.id)));
+    state.sources = ex.engines.map((e) => (e ? (e.source || D.programs[e.prog]) : ""));
+    state.cfgs = ex.engines.map((e) => PL.cfgOf(e ? e.cfg : {}));
+    state.inputs = Object.fromEntries((ex.inputs || []).map((i) => [i.id, i.value]));
+    state.engine = 0;
+    state.session = null; state.result = null; state.audio = null;
+    $("summary").textContent = ex.summary;
+    $("note").textContent = ex.note || "";
+    const inputs = $("inputs");
+    inputs.innerHTML = "";
+    (ex.inputs || []).forEach((inp) => {
+      const l = document.createElement("label");
+      l.textContent = inp.label;
+      const f = document.createElement("input");
+      f.id = "in-" + inp.id; f.value = inp.value; f.spellcheck = false;
+      f.style.width = Math.max(16, inp.value.length + 4) + "ch";
+      f.oninput = () => { state.inputs[inp.id] = f.value; };
+      f.onkeydown = (e) => { if (e.key === "Enter") run(); };
+      l.appendChild(f);
+      inputs.appendChild(l);
+    });
+    buildTabs();
+    showEngine(0);
+    run();
+  }
+
+  // ------------------------------------------------------------ editor
+  function buildTabs() {
+    const tabs = $("tabs");
+    tabs.innerHTML = "";
+    [0, 1].forEach((e) => {
+      const b = document.createElement("button");
+      b.className = "tab"; b.setAttribute("role", "tab"); b.id = "tab-" + e;
+      const name = (state.sources[e].match(/^\s*\.program\s+(\S+)/m) || [])[1];
+      b.innerHTML = `Engine ${e}` + (name ? `<span class="pname">${name}</span>` : `<span class="pname">idle</span>`);
+      b.onclick = () => showEngine(e);
+      tabs.appendChild(b);
+    });
+  }
+
+  function showEngine(e) {
+    state.engine = e;
+    document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", String(b.id === "tab-" + e)));
+    $("code").value = state.sources[e];
+    buildCfg();
+    refreshEditor();
+  }
+
+  const esc = (s) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  const MNEM = /^(\s*)(jmp|wait|in|out|push|pull|mov|set|clr|skip|wake|nop)\b/i;
+  function highlightLine(line) {
+    let code = line, comment = "";
+    const m = /;|\/\//.exec(line);
+    if (m) { code = line.slice(0, m.index); comment = line.slice(m.index); }
+    let html = "";
+    const lab = /^(\s*)([A-Za-z_]\w*:)/.exec(code);
+    if (lab) { html += esc(lab[1]) + `<span class="hl-l">${esc(lab[2])}</span>`; code = code.slice(lab[0].length); }
+    const dir = /^(\s*)(\.\w+)/.exec(code);
+    if (dir) { html += esc(dir[1]) + `<span class="hl-d">${esc(dir[2])}</span>`; code = code.slice(dir[0].length); }
+    const mn = MNEM.exec(code);
+    if (mn) { html += esc(mn[1]) + `<span class="hl-k">${esc(mn[2])}</span>`; code = code.slice(mn[0].length); }
+    html += esc(code).replace(/\b(side)\b/g, '<span class="hl-k">$1</span>')
+      .replace(/(\[[^\]]*\]|\b0x[0-9a-fA-F]+\b|\b0b[01]+\b|\b\d+\b)/g, '<span class="hl-n">$1</span>');
+    if (comment) html += `<span class="hl-c">${esc(comment)}</span>`;
+    return html;
+  }
+
+  function assembleCurrent() {
+    try { return { prog: P.assemble(state.sources[state.engine]) }; }
+    catch (err) { return { error: err.message, line: err.line }; }
+  }
+
+  function refreshEditor() {
+    const src = state.sources[state.engine];
+    const lines = src.split("\n");
+    const a = src.trim() ? assembleCurrent() : { empty: true };
+    const byLine = {};
+    if (a.prog) a.prog.lines.forEach((ln, i) => { byLine[ln] = i; });
+    const pcLine = state.session ? state.session.pcLine(state.engine) : null;
+    $("hl").innerHTML = lines.map((l, i) => {
+      const cls = i + 1 === pcLine ? " pc" : (a.line === i + 1 ? " err" : "");
+      return `<span class="ln${cls}">${highlightLine(l) || " "}</span>`;
+    }).join("");
+    $("gutter").innerHTML = lines.map((l, i) => {
+      const n = i + 1, k = byLine[n];
+      const cls = n === pcLine ? "pc" : (a.line === n ? "err" : "");
+      const text = k === undefined ? (a.line === n ? "error" : "") :
+        `${String(k).padStart(2, "0")} <span class="w">${a.prog.code[k].toString(16).padStart(4, "0")}</span>`;
+      return `<div class="${cls}">${n === pcLine ? "▶ " : ""}${text}</div>`;
+    }).join("") + "<div></div>".repeat(20);
+    const box = $("asm");
+    if (a.empty) { box.className = "asm"; box.textContent = "This engine is idle. Write a program to use it."; }
+    else if (a.error) { box.className = "asm err"; box.textContent = a.error; }
+    else {
+      const p = a.prog;
+      box.className = "asm ok";
+      box.textContent = `${p.code.length} of 64 words · wrap ${p.wrap_bottom}–${p.wrap_top}` +
+        (p.side_count ? ` · side-set ${p.side_count}${p.side_pindir ? " pindirs" : ""}` : "");
+    }
+    syncScroll();
+  }
+
+  function syncScroll() {
+    const ta = $("code");
+    $("hl").style.transform = `translate(${-ta.scrollLeft}px, ${-ta.scrollTop}px)`;
+    $("gutter").scrollTop = ta.scrollTop;
+  }
+
+  // ------------------------------------------------------------ settings
+  const CFG_FIELDS = [
+    ["clkdiv", "Clock divider", 0, 65535], ["x", "X at start", 0, 65535], ["y", "Y at start", 0, 65535],
+    ["out_base", "OUT pins: first", 0, 15], ["out_count", "OUT pins: count", 1, 16],
+    ["set_base", "SET pins: first", 0, 15], ["set_count", "SET pins: count", 0, 5],
+    ["side_base", "Side-set: first pin", 0, 15], ["in_base", "IN pins: first", 0, 15],
+    ["jmp_pin", "JMP pin", 0, 15], ["push_thresh", "Push threshold", 1, 16], ["pull_thresh", "Pull threshold", 1, 16],
+    ["crc_init", "CRC at start", 0, 65535], ["crc_poly", "CRC polynomial", 0, 65535],
+  ];
+  const CFG_FLAGS = [["in_right", "Shift in right"], ["out_right", "Shift out right"],
+    ["autopush", "Autopush"], ["autopull", "Autopull"], ["diff", "Differential"],
+    ["crc_in", "CRC on IN"], ["crc_out", "CRC on OUT"]];
+
+  function buildCfg() {
+    const box = $("cfg");
+    const c = state.cfgs[state.engine];
+    box.innerHTML = "";
+    CFG_FIELDS.forEach(([k, label, lo, hi]) => {
+      const l = document.createElement("label");
+      l.textContent = label;
+      const f = document.createElement("input");
+      f.type = "number"; f.min = lo; f.max = hi; f.value = k === "out_count" || k.endsWith("thresh") ? (c[k] || 16) : c[k];
+      f.id = `cfg-${k}`;
+      f.onchange = () => { c[k] = Math.max(lo, Math.min(hi, parseInt(f.value, 10) || 0)); f.value = c[k]; };
+      l.appendChild(f);
+      box.appendChild(l);
+    });
+    CFG_FLAGS.forEach(([k, label]) => {
+      const l = document.createElement("label");
+      l.className = "check";
+      const f = document.createElement("input");
+      f.type = "checkbox"; f.checked = !!c[k]; f.id = `cfg-${k}`;
+      f.onchange = () => { c[k] = f.checked; };
+      l.append(f, label);
+      box.appendChild(l);
+    });
+    const w = document.createElement("div");
+    w.className = "wide";
+    w.textContent = "Pins 0–7 are the bidirectional uio pins, 8–14 the dedicated outputs, 15 an input. Settings apply on the next Run.";
+    box.appendChild(w);
+  }
+
+  // ------------------------------------------------------------ running
+  function setStatus(text, err = false) {
+    const s = $("status");
+    s.textContent = text;
+    s.className = "status" + (err ? " err" : "");
+  }
+
+  function newSession() {
+    const s = new PL.Session(state.ex, state.sources, state.cfgs, state.inputs);
+    state.session = s;
+    return s;
+  }
+
+  async function run() {
+    if (state.running) return;
+    let s;
+    try { s = newSession(); }
+    catch (err) {
+      setStatus(err.message || String(err), true);
+      if (err.line) { refreshEditor(); }
+      return;
+    }
+    const total = state.ex.clocks(state.inputs);
+    state.running = true;
+    $("run").disabled = true;
+    const bar = $("progress");
+    const t0 = performance.now();
+    const CHUNK = 400000;
+    if (total > CHUNK) { bar.hidden = false; bar.value = 0; }
+    for (let done = 0; done < total; done += CHUNK) {
+      s.run(Math.min(CHUNK, total - done));
+      if (total > CHUNK) { bar.value = (done + CHUNK) / total; await new Promise((r) => setTimeout(r, 0)); }
+    }
+    bar.hidden = true;
+    state.running = false;
+    $("run").disabled = false;
+    const ms = performance.now() - t0;
+    finishRun(`Ran ${fmt(s.length)} clocks (${timeText(s.length)} of chip time) in ${Math.round(ms)} ms`);
+    fitView(true);
+  }
+
+  function step(ticks) {
+    if (!state.session) { run(); return; }
+    const s = state.session;
+    const e = s.progs[0] ? 0 : 1;
+    s.run(ticks * (s.cfgs[e].clkdiv + 1));
+    finishRun(`Now at clock ${fmt(s.length)} (${timeText(s.length)})`);
+    const span = state.view[1] - state.view[0];
+    if (s.length > state.view[1]) state.view = [Math.max(0, s.length - span * 0.85), s.length + span * 0.15];
+    drawWave();
+  }
+
+  function finishRun(msg) {
+    const s = state.session;
+    state.result = state.ex.decode(s) || {};
+    state.audio = null;
+    setStatus(msg);
+    $("runinfo").textContent = `${fmt(s.trace.n)} pin changes`;
+    renderOutput();
+    renderRegs();
+    refreshEditor();
+  }
+
+  // ------------------------------------------------------------ outputs
+  function renderOutput() {
+    const box = $("out");
+    const r = state.result;
+    box.innerHTML = "";
+    if (r.vga !== undefined) {
+      const wrap = document.createElement("div");
+      wrap.className = "screen";
+      if (!r.vga) { wrap.innerHTML = '<p class="empty">No complete frame yet: run at least one frame (840,000 clocks).</p>'; }
+      else {
+        const cv = document.createElement("canvas");
+        cv.width = r.vga.width; cv.height = r.vga.height;
+        cv.getContext("2d").putImageData(new ImageData(r.vga.pixels, r.vga.width, r.vga.height), 0, 0);
+        cv.setAttribute("role", "img");
+        cv.setAttribute("aria-label", "The VGA frame decoded from the pins");
+        const cap = document.createElement("div");
+        cap.className = "caption";
+        cap.innerHTML = `The monitor's view: one 640×480 frame, decoded from the sync and colour pins as a monitor samples them. ` +
+          (r.vga.linesOk ? '<span class="ok">Every line is exactly 1,600 clocks (31.25 kHz).</span>' : '<span>Line timing is off.</span>');
+        wrap.append(cv, cap);
+      }
+      box.appendChild(wrap);
+    }
+    if (r.leds) {
+      const row = document.createElement("div");
+      row.className = "leds";
+      if (!r.leds.length) row.innerHTML = '<p class="empty">No complete LED colours yet.</p>';
+      r.leds.forEach((l) => {
+        const d = document.createElement("div");
+        d.className = "led";
+        const col = `rgb(${l.r},${l.g},${l.b})`;
+        d.innerHTML = `<i style="background:${col};box-shadow:0 0 16px ${col}"></i>${[l.r, l.g, l.b].map((v) => v.toString(16).padStart(2, "0")).join("")}`;
+        row.appendChild(d);
+      });
+      const cap = document.createElement("div");
+      cap.className = "caption";
+      cap.textContent = "The colours a strip of WS2812 LEDs would show, decoded from the pulse widths on the data pin.";
+      box.append(row, cap);
+    }
+    if (r.text) {
+      const h = document.createElement("h3");
+      h.textContent = r.text.label;
+      const t = document.createElement("div");
+      t.className = "textout";
+      t.textContent = r.text.value || " ";
+      box.append(h, t);
+    }
+    if (r.audio) {
+      const bar = document.createElement("div");
+      bar.className = "runbar";
+      bar.style.justifyContent = "flex-start";
+      const b = document.createElement("button");
+      b.className = "btn primary"; b.id = "play"; b.textContent = "▶ Play the speaker pin";
+      b.onclick = playAudio;
+      const cap = document.createElement("span");
+      cap.className = "caption";
+      cap.textContent = r.notes.length ? `${r.notes.length} notes, ${timeText(state.session.length)}` : "No notes yet";
+      bar.append(b, cap);
+      const notes = document.createElement("div");
+      notes.className = "notes"; notes.id = "notes";
+      notes.innerHTML = r.notes.map((n, i) => `<span data-i="${i}" title="${n.hz.toFixed(1)} Hz">${n.name}</span>`).join("");
+      box.append(bar, notes);
+    }
+    if (!box.childElementCount) {
+      box.innerHTML = '<p class="empty">This example has no decoder: read the pins below.</p>';
+    }
+  }
+
+  let audioCtx = null, playing = null;
+  function playAudio() {
+    const r = state.result;
+    const s = state.session;
+    if (playing) { playing.stop(); return; }
+    try { audioCtx = audioCtx || new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { setStatus("This browser cannot play audio.", true); return; }
+    const rate = audioCtx.sampleRate;
+    const data = PL.audioSamples(s.trace, r.audio.pin, r.audio.clockS, rate);
+    const buf = audioCtx.createBuffer(1, data.length, rate);
+    buf.copyToChannel(data, 0);
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    const btn = $("play");
+    const startAt = audioCtx.currentTime;
+    playing = src;
+    btn.textContent = "■ Stop";
+    src.onended = () => { playing = null; btn.textContent = "▶ Play the speaker pin"; mark(-1); };
+    src.start();
+    const clockS = r.audio.clockS;
+    const tick = () => {
+      if (playing !== src) return;
+      const t = (audioCtx.currentTime - startAt) / clockS;
+      const i = r.notes.findIndex((n) => n.start <= t && t < n.end);
+      mark(i);
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  }
+  function mark(i) {
+    document.querySelectorAll("#notes span").forEach((s) => s.classList.toggle("now", Number(s.dataset.i) === i));
+  }
+
+  function renderRegs() {
+    const s = state.session, c = s.core;
+    const eng = [0, 1].map((e) => (s.progs[e] ? c.engines[e] : null));
+    const cell = (e, f) => (e ? f(e) : "—");
+    const fifo = (q) => (q.length ? q.map((w) => w.toString(16).padStart(4, "0")).join(" ") : "empty");
+    const st = (e) => {
+      if (!(c.ctrl >> e & 1)) return '<span class="pill off">stopped</span>';
+      const g = c.engines[e];
+      if (g.timed_out) return '<span class="pill stall">timed out</span>';
+      return g.stalled ? '<span class="pill stall">waiting</span>' : '<span class="pill run">running</span>';
+    };
+    const rows = [
+      ["State", (e) => st(e === eng[0] ? 0 : 1)],
+      ["PC (line)", (e) => { const i = eng.indexOf(e); return `${e.pc} (line ${s.pcLine(i) || "?"})`; }],
+      ["X", (e) => `${hex(e.x)} <span style="color:var(--muted)">${e.x}</span>`],
+      ["Y", (e) => `${hex(e.y)} <span style="color:var(--muted)">${e.y}</span>`],
+      ["ISR (bits)", (e) => `${hex(e.isr)} (${e.isr_cnt})`],
+      ["OSR (bits used)", (e) => `${hex(e.osr)} (${e.osr_cnt})`],
+      ["CRC", (e) => hex(e.crc)],
+      ["TIME", (e) => fmt(e.time)],
+      ["TX FIFO", (e) => fifo(e.txf)],
+      ["RX FIFO", (e) => fifo(e.rxf)],
+    ];
+    const bits = (v, n) => v.toString(2).padStart(n, "0").replace(/(\d{4})(?=\d)/g, "$1 ");
+    $("regs").innerHTML = `<table><thead><tr><th></th><th>Engine 0</th><th>Engine 1</th></tr></thead><tbody>` +
+      rows.map(([name, f]) => `<tr><th>${name}</th><td>${cell(eng[0], f)}</td><td>${cell(eng[1], f)}</td></tr>`).join("") +
+      `<tr><th>FLAGS</th><td colspan="2">${bits(c.flags, 8)}</td></tr>` +
+      `<tr><th>PIN_OUT (15…0)</th><td colspan="2">${bits(c.pin_out, 16)}</td></tr>` +
+      `<tr><th>PIN_OE (15…0)</th><td colspan="2">${bits(c.pin_oe, 16)}</td></tr></tbody></table>`;
+  }
+
+  // ------------------------------------------------------------ waveform
+  const LABEL_W = 112, ROW_H = 34, AXIS_H = 24;
+  function cssVar(n) { return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+
+  function fitView(initial) {
+    const s = state.session;
+    if (!s) return;
+    const v = initial && state.ex.view ? state.ex.view : null;
+    state.view = v ? [v[0], Math.min(v[1], Math.max(s.length, 10))] : [0, Math.max(s.length, 10)];
+    drawWave();
+  }
+
+  function drawWave() {
+    const cv = $("wave");
+    const s = state.session;
+    const pins = state.ex ? state.ex.pins : [];
+    const dpr = window.devicePixelRatio || 1;
+    const allMarks = (state.result && state.result.marks) || [];
+    const rows = [];
+    let y = AXIS_H;
+    pins.forEach(([pin]) => {
+      const lane = allMarks.some((m) => m.pin === pin);
+      rows.push({ top: y, lane });
+      y += ROW_H + (lane ? 20 : 0);
+    });
+    const w = cv.clientWidth, h = y + 6;
+    cv.style.height = h + "px";
+    cv.width = Math.round(w * dpr); cv.height = Math.round(h * dpr);
+    const g = cv.getContext("2d");
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    const col = { ink: cssVar("--ink"), muted: cssVar("--muted"), grid: cssVar("--grid"), trace: cssVar("--trace"),
+      fill: cssVar("--trace-fill"), panel: cssVar("--panel"), bad: cssVar("--bad"), accent: cssVar("--accent"),
+      soft: cssVar("--accent-soft") };
+    g.fillStyle = col.panel; g.fillRect(0, 0, w, h);
+    if (!s) return;
+    const [v0, v1] = state.view;
+    const plotW = w - LABEL_W;
+    const X = (t) => LABEL_W + (t - v0) / (v1 - v0) * plotW;
+
+    // time axis
+    g.font = `11px ${cssVar("--font-mono")}`;
+    g.textBaseline = "middle";
+    const span = v1 - v0;
+    const rawStep = span / Math.max(2, plotW / 110);
+    const p10 = Math.pow(10, Math.floor(Math.log10(rawStep)));
+    const stepT = [1, 2, 5, 10].map((m) => m * p10).find((x) => x >= rawStep) || 10 * p10;
+    g.strokeStyle = col.grid; g.lineWidth = 1;
+    for (let t = Math.ceil(v0 / stepT) * stepT; t <= v1; t += stepT) {
+      const x = Math.round(X(t)) + 0.5;
+      g.beginPath(); g.moveTo(x, AXIS_H - 4); g.lineTo(x, h); g.stroke();
+      g.fillStyle = col.muted;
+      g.fillText(timeText(t), x + 4, AXIS_H / 2);
+    }
+
+    // traces
+    const tr = s.trace;
+    pins.forEach(([pin, label], row) => {
+      const top = rows[row].top + 6, hi = top + 3, lo = top + ROW_H - 9;
+      g.fillStyle = col.ink;
+      g.font = `12px ${cssVar("--font-body")}`;
+      g.fillText(label, 8, (hi + lo) / 2);
+      g.font = `11px ${cssVar("--font-mono")}`;
+      if (!tr.n) return;
+      // walk the changes once, drawing each pixel column
+      g.strokeStyle = col.trace; g.lineWidth = 1.5; g.fillStyle = col.fill;
+      let k = tr.index(Math.max(0, Math.floor(v0)));
+      let level = (tr.vals[k] >> pin) & 1;
+      g.beginPath();
+      let px = LABEL_W, py = level ? hi : lo;
+      g.moveTo(px, py);
+      const fills = [];
+      let fillStart = level ? px : null;
+      for (let c = 0; c < plotW; c++) {
+        const t1 = v0 + (c + 1) / plotW * span;
+        let changes = 0, last = level;
+        while (k + 1 < tr.n && tr.times[k + 1] <= t1) {
+          k++;
+          const b = (tr.vals[k] >> pin) & 1;
+          if (b !== last) { changes++; last = b; }
+        }
+        const x = LABEL_W + c + 1;
+        if (changes === 0) { g.lineTo(x, py); continue; }
+        if (changes === 1) {
+          const tx = X(tr.times[k]);
+          g.lineTo(tx, py); py = last ? hi : lo; g.lineTo(tx, py); g.lineTo(x, py);
+          if (last && fillStart === null) fillStart = tx;
+          if (!last && fillStart !== null) { fills.push([fillStart, tx]); fillStart = null; }
+        } else {
+          g.lineTo(x - 0.5, hi); g.lineTo(x - 0.5, lo); py = last ? hi : lo; g.lineTo(x, py);
+          if (fillStart !== null) { fills.push([fillStart, x - 1]); fillStart = null; }
+          if (last) fillStart = x;
+        }
+        level = last;
+        if (t1 >= s.length) break;
+      }
+      if (fillStart !== null) fills.push([fillStart, Math.min(X(s.length), w)]);
+      fills.forEach(([a, b]) => g.fillRect(a, hi, b - a, lo - hi));
+      g.stroke();
+
+      // decoded marks
+      // decoded values in a lane under the trace
+      const laneTop = lo + 6, laneH = 17;
+      allMarks.filter((m) => m.pin === pin).forEach((m) => {
+        const a = X(m.start), b = X(m.end);
+        if (b < LABEL_W || a > w) return;
+        const x0 = Math.max(a, LABEL_W), x1 = Math.min(b, w);
+        if (x1 - x0 < 2) return;
+        g.fillStyle = m.bad ? col.bad : col.soft;
+        g.fillRect(x0 + 0.5, laneTop, Math.max(1, x1 - x0 - 1), laneH);
+        g.strokeStyle = m.bad ? col.bad : col.accent; g.lineWidth = 1;
+        g.strokeRect(x0 + 0.5, laneTop + 0.5, Math.max(1, x1 - x0 - 1), laneH - 1);
+        const tw = g.measureText(m.label).width;
+        if (x1 - x0 > tw + 6) {
+          g.fillStyle = m.bad ? col.bad : col.ink;
+          g.fillText(m.label, (x0 + x1) / 2 - tw / 2, laneTop + laneH / 2 + 0.5);
+        }
+      });
+    });
+
+    // end of recording
+    if (s.length < v1) {
+      const x = X(s.length);
+      g.fillStyle = col.grid; g.globalAlpha = 0.6;
+      g.fillRect(x, AXIS_H, w - x, h - AXIS_H); g.globalAlpha = 1;
+    }
+    if (hover !== null) {
+      const x = Math.round(X(hover)) + 0.5;
+      g.strokeStyle = col.muted; g.setLineDash([3, 3]);
+      g.beginPath(); g.moveTo(x, AXIS_H); g.lineTo(x, h); g.stroke(); g.setLineDash([]);
+    }
+  }
+
+  let hover = null, drag = null;
+  function waveTime(ev) {
+    const cv = $("wave"), r = cv.getBoundingClientRect();
+    const x = ev.clientX - r.left;
+    const [v0, v1] = state.view;
+    return v0 + (x - LABEL_W) / (cv.clientWidth - LABEL_W) * (v1 - v0);
+  }
+  function zoom(factor, at) {
+    const s = state.session;
+    if (!s) return;
+    let [v0, v1] = state.view;
+    const c = at === undefined ? (v0 + v1) / 2 : at;
+    let span = Math.max(20, Math.min((v1 - v0) * factor, Math.max(s.length, 20) * 1.2));
+    v0 = c - (c - v0) * span / (v1 - v0);
+    v0 = Math.max(-span * 0.05, Math.min(v0, s.length - span * 0.5));
+    state.view = [v0, v0 + span];
+    drawWave();
+  }
+  function pan(dt) {
+    const [v0, v1] = state.view;
+    const s = state.session;
+    const span = v1 - v0;
+    const n0 = Math.max(-span * 0.05, Math.min(v0 + dt, (s ? s.length : 0) - span * 0.5));
+    state.view = [n0, n0 + span];
+    drawWave();
+  }
+  function setupWave() {
+    const cv = $("wave");
+    cv.addEventListener("wheel", (ev) => {
+      if (!state.session) return;
+      if (Math.abs(ev.deltaX) > Math.abs(ev.deltaY)) {
+        ev.preventDefault();
+        pan(ev.deltaX / cv.clientWidth * (state.view[1] - state.view[0]));
+      } else if (ev.ctrlKey || ev.metaKey) {     // pinch, or Ctrl/Cmd + scroll
+        ev.preventDefault();
+        zoom(Math.exp(ev.deltaY * 0.0025), waveTime(ev));
+      }
+    }, { passive: false });
+    cv.addEventListener("pointerdown", (ev) => {
+      drag = { x: ev.clientX, view: state.view.slice() };
+      cv.setPointerCapture(ev.pointerId);
+      cv.classList.add("dragging");
+    });
+    cv.addEventListener("pointermove", (ev) => {
+      if (drag) {
+        const dx = ev.clientX - drag.x;
+        const span = drag.view[1] - drag.view[0];
+        state.view = drag.view.slice();
+        pan(-dx / (cv.clientWidth - LABEL_W) * span);
+        return;
+      }
+      if (!state.session) return;
+      const t = Math.round(waveTime(ev));
+      if (t < 0 || t > state.session.length) { hover = null; drawWave(); return; }
+      hover = t;
+      const v = state.session.trace.at(t);
+      const levels = state.ex.pins.map(([p, l]) => `${l.split(" ")[0]} ${(v >> p) & 1}`).join(" · ");
+      $("cursor").textContent = `clock ${fmt(t)} · ${timeText(t)} · ${levels}`;
+      drawWave();
+    });
+    const end = () => { drag = null; cv.classList.remove("dragging"); };
+    cv.addEventListener("pointerup", end);
+    cv.addEventListener("pointercancel", end);
+    cv.addEventListener("pointerleave", () => { if (!drag) { hover = null; drawWave(); } });
+    $("zin").onclick = () => zoom(0.5);
+    $("zout").onclick = () => zoom(2);
+    $("zfit").onclick = () => fitView(false);
+    new ResizeObserver(() => drawWave()).observe(cv);
+    const mq = window.matchMedia("(prefers-color-scheme: dark)");
+    if (mq.addEventListener) mq.addEventListener("change", drawWave);
+    new MutationObserver(drawWave).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+  }
+
+  // ------------------------------------------------------------ start
+  function init() {
+    buildExampleStrip();
+    const ta = $("code");
+    ta.addEventListener("input", () => {
+      state.sources[state.engine] = ta.value;
+      state.session = null;
+      buildTabs();
+      document.querySelectorAll(".tab").forEach((b) => b.setAttribute("aria-selected", String(b.id === "tab-" + state.engine)));
+      refreshEditor();
+    });
+    ta.addEventListener("scroll", syncScroll);
+    ta.addEventListener("keydown", (ev) => {
+      if (ev.key === "Tab" && !ev.shiftKey) {
+        ev.preventDefault();
+        const a = ta.selectionStart;
+        ta.setRangeText("    ", a, ta.selectionEnd, "end");
+        ta.dispatchEvent(new Event("input"));
+      }
+      if (ev.key === "Enter" && (ev.metaKey || ev.ctrlKey)) { ev.preventDefault(); run(); }
+    });
+    $("run").onclick = run;
+    $("step").onclick = () => step(1);
+    $("step100").onclick = () => step(100);
+    setupWave();
+    const route = () => selectExample((location.hash || "").slice(1));
+    window.addEventListener("hashchange", route);
+    route();
+  }
+  init();
+})();
+</script>

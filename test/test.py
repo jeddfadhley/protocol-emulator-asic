@@ -5,6 +5,7 @@ Every protocol scenario from sw/pemu/scenarios.py runs here against real
 firmware and device models; the same tests run on the gate-level netlist.
 """
 
+import os
 import random
 
 import cocotb
@@ -96,3 +97,24 @@ def _scenario_test(scenario):
 
 for _s in SCENARIOS:
     globals()[f"test_{_s.__name__}"] = _scenario_test(_s)
+
+
+@cocotb.test(skip=os.environ.get("VGA_FRAME") is None)
+async def test_vga_frame(dut):
+    """A whole VGA frame from the RTL (about 3 minutes, so only when VGA_FRAME
+    is set; it names a PNG file for the picture, or is empty)."""
+    from pemu import vga
+    from pemu.scenarios import program
+    b = await bench(dut)
+    img = vga.demo_picture()
+    await vga.setup(b, vga.picture(img), program("vga_sync"), program("vga_pixels"))
+    mon = b.monitor(vga.VgaMonitor())
+    await b.run(2 * vga.FRAME_CLOCKS)
+    frames, problems = vga.decode(mon.samples)
+    assert not problems, problems[:5]
+    assert len(frames) == 1 and frames[0] == vga.expected_frame(img)
+    if os.environ["VGA_FRAME"]:
+        from PIL import Image
+        im = Image.new("RGB", (640, 480))
+        im.putdata([vga.to_rgb(c) for row in frames[0] for c in row])
+        im.save(os.environ["VGA_FRAME"])

@@ -153,6 +153,17 @@ class Pemu:
         return found
 
 
+    def vga(self, words=None):
+        """640x480 VGA on uio[7:0] (TinyVGA Pmod). `words`: your own 64x32
+        picture, 128 words, 4 per row, leftmost pixel in bit 15."""
+        self.load_demo("VGA")
+        if words:
+            self.ram_write(0, words)
+
+    def music(self):
+        """Ode to Joy on a speaker on uio[7], played from the packet RAM."""
+        self.load_demo("MUSIC")
+
     # ----- packet RAM and DMA -----
 
     def ram_write(self, addr, words):

@@ -18,6 +18,9 @@
 //                           without the 200 ohm Pmod series resistors
 //   in 9-11   ui_in[1..3]   Pmod JC1-3
 //   in 15     ui_in[7]      Pmod JC4
+//   VGA port  pins 0-7 as the TinyVGA PMOD (R1 G1 B1 VSYNC R0 G0 B0 HSYNC),
+//             see sw/pemu/vga.py: the picture also shows on the board's own
+//             VGA connector
 //   LED[7:0]  levels of PEMU pins 0-7, LED[14:8] = uo_out[6:0], LED[15] = UART activity
 //   btnC      reset
 module pemu_basys3 (
@@ -32,7 +35,12 @@ module pemu_basys3 (
     input  wire        eth_rx_n,  // XA1_N
     output wire        eth_td_p,  // XA2_P: copy of PEMU pin 0
     output wire        eth_td_n,  // XA2_N: copy of PEMU pin 1
-    output wire [15:0] led
+    output wire [15:0] led,
+    output wire [3:0]  vgaRed,
+    output wire [3:0]  vgaGreen,
+    output wire [3:0]  vgaBlue,
+    output wire        Hsync,
+    output wire        Vsync
 );
 
   // ---------------- 100 MHz -> 50 MHz ----------------
@@ -97,6 +105,16 @@ module pemu_basys3 (
   // them (released = 0 V across the transformer = 10BASE-T idle)
   OBUFT u_td_p (.I(uio_out[0]), .T(~uio_oe[0]), .O(eth_td_p));
   OBUFT u_td_n (.I(uio_out[1]), .T(~uio_oe[1]), .O(eth_td_n));
+
+  // VGA connector: the TinyVGA PMOD signals on pins 0-7, each 2-bit colour
+  // repeated to fill the Basys 3's 4-bit resistor DACs. Released pins are
+  // black (colours) or idle high (syncs).
+  wire [7:0] vga = (uio_out & uio_oe) | (~uio_oe & 8'b1000_1000);
+  assign vgaRed   = {vga[0], vga[4], vga[0], vga[4]};
+  assign vgaGreen = {vga[1], vga[5], vga[1], vga[5]};
+  assign vgaBlue  = {vga[2], vga[6], vga[2], vga[6]};
+  assign Vsync    = vga[3];
+  assign Hsync    = vga[7];
 
   // ---------------- PEMU + bridge ----------------
   wire uart_activity;

@@ -13,10 +13,16 @@ At a glance:
 
 - **21 protocol programs** included, from SPI in 2 instructions to a CAN
   receiver that acknowledges frames in 64. Ethernet takes 31.
+- **Beyond protocols:** written after layout sign-off, 640×480 **VGA video**,
+  a **music box** that plays a tune from its own memory, and a **MIDI
+  synthesizer**. The chip has no video or audio hardware.
+- **A playground in the browser** ([playground/index.html](playground/index.html)):
+  write programs and watch the pins, with a simulator checked against the
+  reference model on every clock.
 - **Generality tested blind:** five protocols that played no part in the
   design were added after the hardware was frozen, and fitted.
 - **Checked from every side:** a separate reference model compared on every
-  clock, formal proofs, 50 protocol tests on the RTL and on the routed
+  clock, formal proofs, 53 chip tests on the RTL and on the routed
   layout with real gate delays, 59 of 59 planted bugs caught, and the same
   design on an FPGA board matching the model register for register.
 - **Layout signed off** in an 8x4-tile Tiny Tapeout slot on IHP 130 nm:
@@ -150,6 +156,39 @@ Each one runs in the test suite against a model of whatever is on the other
 end of the wire (a sensor, a keyboard, a bus, a link partner), written from
 that protocol's own rules rather than from PEMU's.
 
+### After sign-off: a picture, a tune and a synthesizer
+
+The v4 layout was finished before these were written, so they are a second
+blind test, and a harder one: they are not protocols at all.
+
+**VGA video.** Two programs (50 and 30 instructions) make a 640×480, 60 Hz
+picture that any monitor accepts. Engine 0 makes the sync pulses: 1600
+clocks per line, 525 lines per frame, every timing written as instruction
+delays. Engine 1 draws a 64×32 picture that DMA streams from the packet RAM,
+keeping each row in its registers for 15 lines. Flags keep the two engines
+in step. This frame came from simulating the chip's Verilog for 1.7 million
+clocks and sampling the pins the way a monitor does; it matches the model
+pixel for pixel, and every line is exactly 1,600 clocks. The VGA, music and
+MIDI tests also pass on the routed layout with real gate delays at all
+three process corners.
+
+![A VGA frame produced by the PEMU RTL: the word PEMU and HELLO VGA in green on dark blue, with a border](figures/vga-frame.png)
+
+**A music box.** The packet RAM holds a tune, one word per note. Both
+engines' DMA channels stream it: engine 0 (6 instructions) times each note
+and raises a flag, and engine 1 (13 instructions) plays it as a square wave
+on a speaker pin, in tune to within 2 cents. Once started, the chip plays
+the whole of Ode to Joy with no help from the host.
+
+**A MIDI synthesizer.** MIDI is a UART at 31,250 baud, so the existing
+`uart_rx` program receives a keyboard unchanged, and the host turns its
+note messages into words for the same instrument program.
+
+None of these needed a hardware change. On the Basys 3 board,
+`python3 -m pemu.fpga vga`, `music` and `midi` run them
+([fpga.md](fpga.md#pictures-music-and-midi)); details in
+[new-protocols.md](new-protocols.md#after-sign-off-video-music-and-midi).
+
 ## 4. How we know it works
 
 Correctness rests on checks anyone can re-run, not on review.
@@ -157,10 +196,10 @@ Correctness rests on checks anyone can re-run, not on review.
 | Check | What it shows |
 |---|---|
 | **Lockstep co-simulation** | The RTL and a separate Python model agree on every register, pin and packet RAM word, every clock, over random programs covering the whole instruction encoding (about 700,000 compared clocks per CI run). |
-| **Protocol scenarios** | 50 tests run real firmware against device models that enforce each protocol's own timing rules, through the chip's real SPI pins, on the RTL and again on the routed gate-level netlist. |
+| **Protocol scenarios** | 53 tests run real firmware against device models that enforce each protocol's own timing rules, through the chip's real SPI pins, on the RTL and again on the routed gate-level netlist. |
 | **Formal proofs** | Cycle exactness, FIFO safety and ordering, trap behaviour, DMA rules: proven for all inputs (bounded model checking plus induction). |
 | **Mutation testing** | 59 realistic bugs planted one at a time; the tests catch all 59. This checks the tests themselves. |
-| **Timed gate-level simulation** | All 50 tests also pass on the routed netlist with its real gate delays, at all three process corners, at 50 MHz. This catches races that zero-delay simulation cannot. |
+| **Timed gate-level simulation** | All 53 tests also pass on the routed netlist with its real gate delays, at all three process corners, at 50 MHz. This catches races that zero-delay simulation cannot. |
 | **Real hardware** | The same v4 RTL on a Basys 3 FPGA board passes the UART, USB and Ethernet self-tests, and matches the Python model register for register over 18,000 single-stepped ticks of random programs. |
 | **Layout sign-off** | Tiny Tapeout CI: DRC, LVS, antenna and precheck clean. |
 
@@ -237,10 +276,19 @@ wrong is in [ai-usage.md](ai-usage.md).
 
 ## 8. Try it
 
+**In a browser:** open [playground/index.html](playground/index.html) (one
+self-contained file). Pick an example (serial text, LEDs, the VGA picture,
+the music box) or write your own program, press Run, and read the pins,
+the decoded output and the registers. The page's simulator is a JavaScript
+translation of the Python model, and a test runs both on random programs
+and random host traffic and compares every register on every clock.
+
+**The full checks:**
+
 ```bash
 pip install -r test/requirements.txt    # cocotb, pytest; needs Icarus Verilog
 cd sw && python -m pytest -q tests      # model, assembler, firmware
-cd ../test && make                      # the 50 chip tests on the RTL
+cd ../test && make                      # the 53 chip tests on the RTL
 make TB=core                            # RTL against the model, every clock
 ../formal/run.sh                        # formal proofs (Yosys + Yices)
 ```

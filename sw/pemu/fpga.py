@@ -22,6 +22,9 @@ Command line (run from the sw/ directory):
     python3 -m pemu.fpga usb-selftest       USB send + sniff, on-chip
     python3 -m pemu.fpga usb-sniff          decode USB low-speed traffic (e.g. a keyboard)
     python3 -m pemu.fpga lockstep           compare the board with the Python model, tick by tick
+    python3 -m pemu.fpga vga ["TEXT"]       a picture on the Basys 3 VGA port (640x480)
+    python3 -m pemu.fpga music              play a tune on a speaker on Pmod JA10
+    python3 -m pemu.fpga midi               a MIDI keyboard on Pmod JC3 plays the speaker
 
 Add --port /dev/tty.usbserial-XXXX1 if auto-detection picks the wrong port.
 pyserial (pip3 install pyserial) is only needed to talk to real hardware.
@@ -352,6 +355,103 @@ def cmd_lockstep(args, out):
     return 0
 
 
+class _Bench:
+    """The async bench interface of sw/pemu/hostapi.py over the board, so the
+    demo setup code in vga.py and music.py runs here unchanged."""
+
+    def __init__(self, chip):
+        from .hostapi import HostApi
+        self.chip = chip
+        for name in ("apply", "setup", "start", "push", "send", "drain", "status", "pop",
+                     "ram_write", "dma", "flag_set", "flag_clr"):
+            setattr(self, name, getattr(HostApi, name).__get__(self))
+
+    async def write(self, addr, value):
+        self.chip.write(addr, value)
+
+    async def read(self, addr, pop=True):
+        return self.chip.read(addr)
+
+    async def run(self, n):
+        time.sleep(n / 50e6)
+
+
+def _run(coro):
+    import asyncio
+    return asyncio.run(coro)
+
+
+def cmd_vga(args, out):
+    from . import vga
+    from .scenarios import program
+    link = args.open_link()
+    link.reset()                      # clear flags and engines left by other demos
+    chip = pemu_board.Pemu(link)
+    chip.check()
+    try:
+        img = vga.text_picture(args.text) if args.text else vga.demo_picture()
+    except ValueError as e:
+        print(f"error: {e}", file=out)
+        return 2
+    _run(vga.setup(_Bench(chip), vga.picture(img), program("vga_sync"),
+                   program("vga_pixels")))
+    for row in img[::2]:
+        print("".join("#" if a or b else " " for a, b in zip(row[::2], row[1::2])), file=out)
+    print("VGA running: 640x480 at 60 Hz on the Basys 3 VGA port (and Pmod JA, "
+          "TinyVGA order)", file=out)
+    return 0
+
+
+def cmd_music(args, out):
+    from . import music
+    from .scenarios import program
+    link = args.open_link()
+    link.reset()                      # clear flags and engines left by other demos
+    chip = pemu_board.Pemu(link)
+    chip.check()
+    words = music.song_words(music.ODE_TO_JOY)
+    step = music.step_crc(30 / args.bpm)          # a step is an 8th note
+    _run(music.music_box(_Bench(chip), words, program("tone"), program("conductor"),
+                         conductor_cfg=music.conductor_config(step=step)))
+    print(f"playing Ode to Joy ({len(words) - 1} notes at {args.bpm} bpm) from the packet "
+          "RAM, with no help from the PC: speaker on PEMU pin 7 (Pmod JA10)", file=out)
+    return 0
+
+
+def cmd_midi(args, out):
+    from . import music
+    from .scenarios import program
+    link = args.open_link()
+    link.reset()                      # clear flags and engines left by other demos
+    chip = pemu_board.Pemu(link)
+    chip.check()
+    bench = _Bench(chip)
+    _run(music.midi_synth_start(bench, program("tone"), program("uart_rx")))
+    parser, voice = music.MidiParser(), music.MonoVoice()
+    print("MIDI synth: MIDI in on PEMU pin 11 (Pmod JC3), speaker on pin 7 (Pmod JA10). "
+          "Ctrl-C to stop.", file=out, flush=True)
+    polls = 0
+    try:
+        while args.polls is None or polls < args.polls:
+            polls += 1
+            level = (chip.status(0) >> 8) & 7
+            for _ in range(level):
+                for ev in parser.feed(chip.read(pemu_board.engine_base(0) + pemu_board.R_FIFO)):
+                    note = voice.update(ev)
+                    if note is False:
+                        continue
+                    try:
+                        _run(music.midi_synth_play(bench, note))
+                        print(f"note {note}" if note is not None else "quiet",
+                              file=out, flush=True)
+                    except ValueError:
+                        print(f"note {note} is too low for the synth", file=out, flush=True)
+    except KeyboardInterrupt:
+        pass
+    _run(music.midi_synth_play(bench, None))
+    return 0
+
+
 def _relink(link):
     """Recover the bridge after a lost byte, then reset PEMU."""
     link._pending = 0
@@ -404,6 +504,15 @@ def build_parser():
     ls.add_argument("--programs", type=int, default=40)
     ls.add_argument("--ticks", type=int, default=150)
     ls.set_defaults(func=cmd_lockstep)
+    vg = sub.add_parser("vga", help="show a picture on the VGA port (up to 3 lines of text)")
+    vg.add_argument("text", nargs="*")
+    vg.set_defaults(func=cmd_vga)
+    mu = sub.add_parser("music", help="play Ode to Joy from the packet RAM on Pmod JA10")
+    mu.add_argument("--bpm", type=int, default=120)
+    mu.set_defaults(func=cmd_music)
+    mi = sub.add_parser("midi", help="MIDI synth: MIDI in on Pmod JC3, speaker on Pmod JA10")
+    mi.add_argument("--polls", type=int, default=None, help="stop after this many polls")
+    mi.set_defaults(func=cmd_midi)
     return p
 
 

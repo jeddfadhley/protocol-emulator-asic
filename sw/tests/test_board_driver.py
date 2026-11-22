@@ -126,3 +126,36 @@ def test_ethernet_serves_ping_on_model():
 
 def test_usb_selftest_on_model():
     assert pemu_board.usb_selftest(ModelLink(idle_clocks=50))
+
+
+def _uio_samples(link, clocks):
+    """Run the model and record the uio wires (pulled up where not driven)."""
+    out = bytearray()
+    c = link.core
+    for _ in range(clocks):
+        c.clock(ui_in=0xFF, uio_in=0xFF)
+        out.append(((c.pin_out & c.pin_oe) | ~c.pin_oe) & 0xFF)
+    return out
+
+
+def test_vga_demo_on_model():
+    from pemu import vga
+    link = ModelLink()
+    pemu_board.Pemu(link).vga()
+    rows, problems = vga.first_lines(_uio_samples(link, 32 * vga.LINE_CLOCKS), 30)
+    assert not problems, problems[:3]
+    want = vga.expected_frame(vga.demo_picture())
+    assert rows == want[1:31]
+
+
+def test_music_demo_on_model():
+    """The first note of the tune, E4, at the real 1 us tick: each half wave
+    (x + 4) us = 50 * (x + 4) clocks."""
+    from pemu import music
+    link = ModelLink()
+    pemu_board.Pemu(link).music()
+    samples = _uio_samples(link, 800_000)        # a 5 ms gap, then the note
+    pin = [s >> music.SPEAKER_PIN & 1 for s in samples]
+    edges = [i for i in range(1, len(pin)) if pin[i] != pin[i - 1]]
+    halves = [b - a for a, b in zip(edges, edges[1:])]
+    assert halves and set(halves) == {50 * (music.half_period_x(music.note_number("E4")) + 4)}

@@ -92,6 +92,8 @@ happened. Each was caught by a check, not by luck.
 | The assembler lower-cased condition names, so `skip !flag F` could not use a `.define`d flag number | assembling the CAN receiver |
 | The reset-strap test released reset and the strap on the same clock edge, which only works with zero delays: in the real layout reset arrives later than the strap | the timed gate-level simulation, at all three corners; the test now holds the strap two clocks longer, and the docs state the rule |
 | The first FPGA lockstep check assumed reset clears the program memories. It does on the chip, but not on the FPGA, so leftover instructions showed up as false differences | the check itself, on the board; it now writes every word before each program |
+| The browser playground's simulator is a hand translation of the Python model and assembler, the kind of copy that drifts. The first fuzzed assembler tests missed a planted bug in the delay range check, because random lines rarely had a valid instruction with an out-of-range delay | planting bugs in the translation on purpose: five model bugs were caught at once, the delay bug was not, so the fuzzer now builds valid instructions with random side-set values and delays, and catches it |
+| The first music-box check counted the speaker pin's pulled-up level before the program started as a note | the check failing on its first run; it now starts recording after setup |
 
 One limit of simulation came up and is stated rather than hidden: a latch
 closing on the wrong clock edge passes every zero-delay test. The design

@@ -15,6 +15,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pemu.host import EngineConfig, config_writes, load_writes  # noqa: E402
 from pemu.ethhost import MAX_RX_BYTES  # noqa: E402
+from pemu import music, vga  # noqa: E402
+from pemu.model import (A_DMA0, A_DMA1, A_FLAG_SET, A_PIN_OE, A_RAM_ADDR,  # noqa: E402
+                        A_RAM_DATA, dma_word)
 from pemu.scenarios import (ETH_RD, ETH_TD,  # noqa: E402
                             LED_PIN, SCL, SDA, UART_TX_PIN, USB_DP, USB_RX_DP, eth_rx_cfg,
                             eth_tx_cfg, i2c_cfg, program, usb_rx_cfg, usb_tx_cfg)
@@ -74,6 +77,27 @@ def demos():
     yield "I2C", (
         f"I2C master at ~100 kHz, SDA on GPIO{SDA}, SCL on GPIO{SCL} (needs pull-ups).",
         setup(0, program("i2c_master"), 0, i2c), 0x1, False, 0)
+    sync, pixels = vga.configs()
+    words = vga.picture(vga.demo_picture())
+    yield "VGA", (
+        "640x480 60 Hz VGA on uio[7:0] in TinyVGA Pmod order: a 64x32 picture from the "
+        "packet RAM (replace it with ram_write(0, 128 words) at any time).",
+        [(A_PIN_OE, 0xFF)] + setup(0, program("vga_sync"), 0, sync)
+        + setup(1, program("vga_pixels"), 0, pixels)
+        + [(A_RAM_ADDR, 0)] + [(A_RAM_DATA, w) for w in words]
+        + [(A_DMA1, dma_word(0, 255, False)), (A_FLAG_SET, 1 << 1)],
+        0x3, False, 0)
+    song = music.song_words(music.ODE_TO_JOY)
+    yield "MUSIC", (
+        f"Music box: Ode to Joy from the packet RAM on uio[{music.SPEAKER_PIN}] (a speaker "
+        "through a resistor), timed by engine 0 and played by engine 1, with no host help.",
+        [(A_PIN_OE, 1 << music.SPEAKER_PIN)]
+        + setup(0, program("conductor"), 0, music.conductor_config())
+        + setup(1, program("tone"), 0, music.tone_config())
+        + [(A_RAM_ADDR, 0)] + [(A_RAM_DATA, w) for w in song]
+        + [(A_DMA0, dma_word(0, len(song), False)), (A_DMA1, dma_word(0, len(song), False)),
+           (A_FLAG_SET, 1 << music.NEXT)],
+        0x3, False, 0)
 
 
 def main():

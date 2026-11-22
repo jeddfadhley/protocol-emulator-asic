@@ -133,6 +133,31 @@ Ethernet commands:
 | `python3 -m pemu.fpga eth-send "hello"` | broadcasts a UDP packet (port 7777, from 192.168.7.2). Add `--count 10` to send several, one per second. Watch them arrive in Wireshark on the laptop. |
 | `python3 -m pemu.fpga eth-serve` | PEMU becomes 192.168.7.2 and answers ARP, ping and UDP echo (port 7). Every received frame is printed. Ctrl-C stops it. |
 
+### Pictures, music and MIDI
+
+| Command | What it does |
+|---------|--------------|
+| `python3 -m pemu.fpga vga` | a 640×480 picture on the Basys 3's **VGA port**: plug in any monitor. Give your own text: `vga "HI" "THERE"` (one big word of up to 5 letters, then up to two lines of 10) |
+| `python3 -m pemu.fpga music` | PEMU plays Ode to Joy on a speaker on **Pmod JA10** (PEMU pin 7). The whole tune is in the packet RAM, and the PC does nothing once it starts. `--bpm 90` plays it slower |
+| `python3 -m pemu.fpga midi` | a MIDI synthesizer: play a MIDI keyboard into **Pmod JC3** (PEMU pin 11) and PEMU plays the notes on the speaker. Ctrl-C stops it |
+
+**VGA**: nothing to wire; the board's VGA connector is driven from PEMU pins
+0-7. The same signals are on Pmod JA in the order of the Tiny Tapeout VGA
+Pmod (JA1 red, JA2 green, JA3 blue, JA4 vsync, JA7-JA9 the low colour bits,
+JA10 hsync), which is how the real chip would drive a monitor.
+
+**Speaker**: a small 8 Ω speaker or a piezo buzzer between JA10 and GND (JA11),
+with a 100 Ω resistor in series (the board's own 200 Ω resistor is also in
+the path, so it is quiet but safe). For headphones, add a 1 kΩ resistor and
+a 10 µF capacitor in series and keep the volume down.
+
+**MIDI in**: a MIDI keyboard with a round 5-pin DIN **MIDI OUT** socket, and
+the standard opto-isolated input: a 6N138 optocoupler, a 220 Ω resistor in
+series with its LED (DIN pins 4 and 5), a 1N4148 diode across the LED, and
+a 470 Ω pull-up from its output to 3.3 V. Its output goes to JC3. MIDI
+breakout boards with this circuit cost a few pounds. Keyboards with only a
+USB socket need a computer in between, so they will not work directly.
+
 ### Sniff a USB keyboard
 
 `python3 -m pemu.fpga usb-sniff` records USB low-speed traffic (1.5 Mbit/s:
@@ -189,7 +214,7 @@ Pins 5 and 11 are GND, pins 6 and 12 are 3.3 V.
 | 4 | uio[4] | JA7 | H1 | bidirectional, pull-up; I2C SDA in the demos |
 | 5 | uio[5] | JA8 | K2 | bidirectional, pull-up; I2C SCL in the demos |
 | 6 | uio[6] | JA9 | H2 | bidirectional, pull-up |
-| 7 | uio[7] | JA10 | G3 | bidirectional, pull-up |
+| 7 | uio[7] | JA10 | G3 | bidirectional, pull-up; speaker in the music demos |
 | 8 (out) | uo_out[0] | JB1 | A14 | output |
 | 9 (out) | uo_out[1] | JB2 | A16 | output |
 | 10 (out) | uo_out[2] | JB3 | B15 | output |
@@ -201,13 +226,14 @@ Pins 5 and 11 are GND, pins 6 and 12 are 3.3 V.
 | 0, 1 (copy) | uio[0], uio[1] | JXADC2 / JXADC8 | L3 / M3 | outputs, same as JA1/JA2 (released together with them); Ethernet TD+ / TD- without the 200 Ω resistors |
 | 9 (in) | ui_in[1] | JC1 | K17 | input, no pull-up; USB sniffer D+ |
 | 10 (in) | ui_in[2] | JC2 | M18 | input, no pull-up; USB sniffer D- |
-| 11 (in) | ui_in[3] | JC3 | N17 | input, pull-up |
+| 11 (in) | ui_in[3] | JC3 | N17 | input, pull-up; MIDI in |
 | 15 (in) | ui_in[7] | JC4 | P18 | input, pull-up |
 | host CS_N, SCK, MOSI, MISO | ui_in[4..6], uo_out[7] | inside the FPGA | | driven by the UART bridge |
 | | | RsRx / RsTx | B18 / A18 | USB serial, 1,000,000 baud |
 | | | LED 0-7 | | actual levels of PEMU pins 0-7 |
 | | | LED 8-14 | | PEMU output pins 8-14 |
 | | | LED 15 | | serial activity |
+| 0-7 (copy) | uio[0..7] | VGA connector | G19 … R19 | the colours (each 2-bit colour fills a 4-bit DAC) and syncs, TinyVGA order |
 | | | btnC | U18 | reset |
 
 PEMU pins 8-11 exist both as an output (JB) and as an input (JXADC/JC), as on
