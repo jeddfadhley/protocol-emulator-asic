@@ -182,7 +182,11 @@ the whole of Ode to Joy with no help from the host.
 
 **A MIDI synthesizer.** MIDI is a UART at 31,250 baud, so the existing
 `uart_rx` program receives a keyboard unchanged, and the host turns its
-note messages into words for the same instrument program.
+note messages into words for a 16-instruction voice, `synth`, that covers
+every key of a piano (A0 at 27.5 Hz to C8) in tune to within 7 cents. With
+only one engine left for sound, chords are played the way 8-bit game
+consoles did: the held notes take turns, 25 ms each, fast enough that the
+ear hears a chord.
 
 None of these needed a hardware change. On the Basys 3 board,
 `python3 -m pemu.fpga vga`, `music` and `midi` run them

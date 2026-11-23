@@ -337,6 +337,6 @@ def test_cli_midi(link):
             return super().step(wires)
     link.ser.spi.midi = Keyboard(1600)
     rc, out = run(["midi", "--polls", "400"], link)
-    assert rc == 0 and "note 69" in out, out
-    # The tone engine got A4 (440 Hz) and then the closing rest.
-    assert link.ser.spi.core.engines[1].x in (0, music.half_period_x(69))
+    assert rc == 0 and "playing A4" in out, out
+    # `synth` got A4 (440 Hz; its count stays in CRC) and then the closing rest.
+    assert link.ser.spi.core.engines[1].crc == music.synth_word(69) & music.X_MAX

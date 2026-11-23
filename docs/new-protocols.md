@@ -216,6 +216,7 @@ designed for.
 | [`vga_pixels.pasm`](../sw/programs/vga_pixels.pasm) | 30 | a 64×32 picture streamed from the packet RAM by a ring DMA; each 4-word row is kept in X, Y, CRC and ISR for its 15 lines | same |
 | [`tone.pasm`](../sw/programs/tone.pasm) | 13 | a square-wave instrument: each half wave is exactly (value + 4) ticks, with a short gap between notes | `music_box`, `midi_synth` |
 | [`conductor.pasm`](../sw/programs/conductor.pasm) | 6 | times each note of a song in the packet RAM and moves `tone` on with a flag | `music_box` |
+| [`synth.pasm`](../sw/programs/synth.pasm) | 16 | the MIDI synth's voice: the whole MIDI range (8 Hz to 12.5 kHz) by repeating the count up to 16 times for low notes; each half wave is exactly (M + 1) × (X + 3) + 3 ticks | `midi_synth`, `sw/tests/test_music.py` |
 
 **VGA.** The chip has no video hardware. One tick of `vga_sync` is 8 pixels
 and one tick of `vga_pixels` is one pixel (2 clocks, a 25 MHz pixel clock),
@@ -237,10 +238,25 @@ tune to within 2 cents up to C6.
 
 **MIDI synth.** MIDI is a UART at 31,250 baud, so `uart_rx` receives it
 unchanged (CLKDIV 199). The host turns note-on and note-off messages
-(with running status and real-time bytes) into `tone` words, with
-last-note priority. The `midi_synth` scenario sends a note, a second key,
-its release and a note-off through the chip's input pin, and checks every
-half wave that comes out.
+(with running status and real-time bytes) into words for `synth`.
+
+`synth` covers a whole piano and more. With `tone`'s 12-bit count of 1 µs
+ticks the lowest note is B2 (122 Hz); `synth` takes 4 more bits, M, and
+repeats the count M + 1 times, so a half wave reaches 65 ms (8 Hz). The host
+picks the M and X closest to each note: high notes use M = 0 and single
+ticks, so every key from A0 to C8 is within 7 cents. The note changes only
+at the end of a whole wave, and the host writes a new word only once
+`synth` has taken the last one (flag 0 clear), so the FIFO never holds an
+old note.
+
+**Chords on one voice.** Each engine makes one tone, and engine 0 is busy
+receiving MIDI, so the chip can't sound two notes at once. With several
+keys held, the host plays them in turn, lowest first, 25 ms each (40 notes a
+second): the arpeggio that 8-bit computers and game consoles used for
+chords, which the ear hears as a shimmering chord. The `midi_synth`
+scenario sends a note, a note low enough to need M > 0, a three-key chord
+and releases through the chip's input pin, and checks every half wave that
+comes out, and that the chord's notes take turns in order.
 
 ## Running them on real hardware
 

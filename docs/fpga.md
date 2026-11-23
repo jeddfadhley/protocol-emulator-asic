@@ -139,7 +139,7 @@ Ethernet commands:
 |---------|--------------|
 | `python3 -m pemu.fpga vga` | a 640×480 picture on the Basys 3's **VGA port**: plug in any monitor. Give your own text: `vga "HI" "THERE"` (one big word of up to 5 letters, then up to two lines of 10) |
 | `python3 -m pemu.fpga music` | PEMU plays Ode to Joy on a speaker on **Pmod JA10** (PEMU pin 7). The whole tune is in the packet RAM, and the PC does nothing once it starts. `--bpm 90` plays it slower |
-| `python3 -m pemu.fpga midi` | a MIDI synthesizer: play a MIDI keyboard into **Pmod JC3** (PEMU pin 11) and PEMU plays the notes on the speaker. Ctrl-C stops it |
+| `python3 -m pemu.fpga midi` | a MIDI synthesizer: play a MIDI keyboard into **Pmod JC3** (PEMU pin 11) and PEMU plays the notes on the speaker, over the whole piano. Hold several keys for a chiptune chord (the notes take turns, 25 ms each; `--arp-ms 40` slows them). Ctrl-C stops it |
 
 **VGA**: nothing to wire; the board's VGA connector is driven from PEMU pins
 0-7. The same signals are on Pmod JA in the order of the Tiny Tapeout VGA

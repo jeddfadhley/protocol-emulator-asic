@@ -7,7 +7,7 @@ import os
 
 from .asm import assemble_file
 from .host import EngineConfig
-from .model import A_PIN_OE, A_PIN_SET
+from .model import A_FLAGS, A_PIN_OE, A_PIN_SET
 from .periph_ext import (CanBus, CanNode, Dht22, DmxController, NecRemote, OneWireDevice,
                          Ps2Keyboard, QuadratureEncoder, SpiController, SwdTarget, crc8_maxim,
                          odd_parity)
@@ -633,37 +633,67 @@ async def music_box(b):
 
 
 async def midi_synth(b):
-    """MIDI in, sound out: note on, a second key (last-note priority),
-    releasing it falls back to the first, and note-on with velocity 0
-    silences the voice. Real-time clock bytes in between are ignored."""
+    """MIDI in, sound out on `synth`: a note; a low note that needs the
+    repeat count (M > 0); a three-key chord, which the arpeggiator plays as
+    each held note in turn; releasing keys back to one note and then
+    silence. Note-on with velocity 0 is a note-off, real-time bytes in
+    between are ignored, every half wave has exactly the length the host
+    asked for, and the FIFO never holds more than one waiting note."""
     from . import music
     from .periph import PulseRecorder, UartSource
     from .scenarios import UART_CPB, UART_DIV
-    tick_s = 1 / (2 * music.frequency(60) * 44)      # note 60 -> 44-tick half waves
+    tick_s = 1 / (2 * music.frequency(60) * 300)     # note 60 -> 300-tick half waves
+    step = 3000                                       # arpeggio step, in clocks
     rec = b.monitor(PulseRecorder(music.SPEAKER_PIN))
     src = b.ui(UartSource(UART_CPB), music.MIDI_PIN - 8)
-    await music.midi_synth_start(b, program("tone"), program("uart_rx"),
-                                 tone_cfg=music.tone_config(clkdiv=0, gap=0),
+    await music.midi_synth_start(b, program("synth"), program("uart_rx"),
+                                 synth_cfg=music.synth_config(clkdiv=0),
                                  rx_cfg=music.midi_rx_config(clkdiv=UART_DIV))
-    parser, voice = music.MidiParser(), music.MonoVoice()
-    steps = [([0x90, 60, 100], 60), ([0xF8, 64, 90], 64), ([0x80, 64, 0], 60),
-             ([0x90, 60, 0], None)]
-    for msg, expect in steps:
+    parser, arp = music.MidiParser(), music.Arpeggiator(step_s=step)
+    now, sent = 0, None
+    assert music.synth_word(12, tick_s) >> 12 > 0      # needs M > 0
+    half = {n: music.synth_half(music.synth_word(n, tick_s)) for n in (12, 60, 64, 67)}
+    steps = [([0x90, 60, 100], {60}, 8), ([0x80, 60, 0, 0x90, 12, 90], {12}, 30),
+             ([0x80, 12, 0, 0x90, 60, 100, 0xF8, 64, 100, 67, 100], {60, 64, 67}, 36),
+             ([0x80, 64, 0, 67, 0], {60}, 8), ([0x90, 60, 0], set(), 8)]
+
+    async def settled():
+        """Wait for `synth` to take the last note; then every later wave is
+        that note's (or a later one's)."""
+        while (await b.read(A_FLAGS)) >> music.NEXT & 1:
+            await b.run(50)
+        return len(rec.runs) + 1                     # skip the old note's last high
+
+    for msg, expect, loops in steps:
         src.queue.extend(msg)
         for byte in await b.drain(0, len(msg)):
+            now += 400
             for ev in parser.feed(byte):
-                note = voice.update(ev)
-                if note is not False:
-                    await music.midi_synth_play(b, note, tick_s)
-        assert voice.playing() == expect
-        mark = len(rec.runs)
-        await b.run(1200)
-        highs = _high_runs(rec, mark)[1:]
-        if expect is None:
+                arp.update(ev, now)
+        assert set(arp.held) == expect, arp.held
+        mark = await settled()
+        for _ in range(loops):
+            note = arp.note(now)
+            if note != sent and await music.midi_synth_play(b, note, tick_s):
+                if sent not in expect:
+                    mark = None                      # the old note is going
+                sent = note
+            assert (await b.status(1)) >> 5 & 7 <= 1      # at most one waiting word
+            if mark is None:
+                mark = await settled()
+            await b.run(1000)
+            now += 1000
+        highs = _high_runs(rec, mark)
+        if not expect:
             assert not highs and rec.level == 0, highs
-        else:
-            assert highs and set(highs) == {music.half_period_x(expect, tick_s) + 4}, highs
-
+            continue
+        assert set(highs) == {half[n] for n in expect}, (expect, set(highs))
+        if len(expect) > 1:          # the arpeggio's order: lowest first, cycling
+            order = [h for i, h in enumerate(highs) if i == 0 or h != highs[i - 1]]
+            want = [half[n] for n in sorted(expect)]
+            assert len(order) >= 2 * len(want), order
+            for a, c in zip(order, order[1:]):
+                assert want.index(c) == (want.index(a) + 1) % len(want), order
 
 
 EXT_SCENARIOS = [onewire, onewire_absent, nec_ir, nec_ir_tolerance, nec_ir_fast, nec_ir_midframe, ps2, ps2_busy, ps2_glitch, swd, swd_errors, can_tx, can_arbitration, can_busy, can_rx, can_rx_bad_crc, spi_device, spi_device_abort,

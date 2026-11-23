@@ -119,7 +119,7 @@ Each scenario runs twice with identical code:
 | `usb_loopback` | engine 0 sends USB, engine 1 sniffs it on-chip |
 | `vga` | 45 lines of 640×480 VGA from both engines: every line 1600 clocks, HSYNC 96 pixels, every pixel's colour where a monitor samples it, held for both of its clocks, and black in the blanking. Whole frames (VSYNC, 525 lines) are checked on the model (`sw/tests/test_vga.py`) and once on the RTL (`VGA_FRAME=... make TESTCASE=test_vga_frame`: one frame, pixel for pixel equal to the model) |
 | `music_box` | a song from the packet RAM, timed by one engine and played by the other: every note's half period exact, its length, the gap between repeated notes, a rest, silence at the end |
-| `midi_synth` | MIDI at 31,250 baud (scaled) into `uart_rx`, the host parser, last-note priority and note-off: every half wave on the speaker pin |
+| `midi_synth` | MIDI at 31,250 baud (scaled) into `uart_rx`, the host parser, `synth`: a note, a low note that needs the repeat count, a three-key chord played as an arpeggio (notes in turn, in order) and note-off: every half wave on the speaker pin, and never more than one waiting note in the FIFO |
 
 The USB receiver also has a tolerance test (`sw/tests/test_usb.py`, on the
 model): it decodes every packet with the sender's clock off by up to ±4%, at

@@ -7,15 +7,18 @@ the packet RAM, one word per note, so once started the chip plays the whole
 song by itself (up to 127 notes and a final rest).
 
 MIDI synth: `uart_rx` (engine 0) receives MIDI at 31,250 baud on ui_in[3]
-and `tone` (engine 1) plays. The host turns MIDI bytes into notes
-(MidiParser + MonoVoice) and gives `tone` one word per note change.
+and `synth` (engine 1) plays: one square wave anywhere in the MIDI range,
+which covers a whole piano. The host turns MIDI bytes into notes
+(MidiParser) and picks the note to sound (Arpeggiator): with several keys
+held it steps through them every few tens of milliseconds, the way 8-bit
+consoles played chords on one voice.
 
 Pins: the speaker on uio[7] (pin 7, as on the Tiny Tapeout Audio Pmod),
 MIDI in on ui_in[3] (pin 11), through the usual 6N138 optocoupler.
 """
 
 from .host import EngineConfig
-from .model import A_FLAG_SET, A_PIN_OE
+from .model import A_FLAG_SET, A_FLAGS, A_PIN_OE
 
 SPEAKER_PIN = 7
 MIDI_PIN = 11
@@ -37,6 +40,12 @@ def note_number(name):
         n += 1 if rest[0] == "#" else -1
         rest = rest[1:]
     return n + 12 * (int(rest) + 1)
+
+
+def note_name(note):
+    """60 -> 'C4' (sharps for the black keys)."""
+    names = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"]
+    return f"{names[note % 12]}{note // 12 - 1}"
 
 
 def frequency(note):
@@ -172,14 +181,84 @@ class MonoVoice:
         return after if after != before else False
 
 
-async def midi_synth_start(b, tone_prog, rx_prog, tone_cfg=None, rx_cfg=None, pin=SPEAKER_PIN):
+class Arpeggiator:
+    """Held keys -> the note to sound now. One key: that note. Several: the
+    held notes in turn, lowest first, each for `step_s` seconds (a chiptune
+    chord: one voice, switched fast enough to sound like a chord). Call
+    `update(event, now)` for each MIDI event and `note(now)` as often as
+    possible; `now` is in seconds."""
+
+    def __init__(self, step_s=0.025):
+        self.step_s = step_s
+        self.held = []
+        self.index = 0
+        self.since = 0.0
+
+    def update(self, event, now):
+        note = event[1]
+        if note in self.held:
+            self.held.remove(note)
+        if event[0] == "on":
+            self.held.append(note)
+        self.index, self.since = 0, now        # a new chord starts at its root
+
+    def note(self, now):
+        notes = sorted(self.held)
+        if not notes:
+            return None
+        steps = int((now - self.since) / self.step_s + 1e-9)   # float rounding
+        if steps > 0:
+            self.index += steps
+            self.since += steps * self.step_s
+        return notes[self.index % len(notes)]
+
+
+SYNTH_M_MAX = 15
+
+
+def synth_half(word_):
+    """Ticks in each half wave for a `synth` word."""
+    m, x = word_ >> 12, word_ & X_MAX
+    return (m + 1) * (x + 3) + 3
+
+
+def synth_word(note, tick_s=(TONE_DIV + 1) / CLK_HZ):
+    """`synth`'s word for a MIDI note (None = rest): the M, X whose half wave
+    is closest to the note's (the smallest M on a tie, for the finest
+    steps)."""
+    if note is None:
+        return 0
+    half = 1 / (2 * frequency(note) * tick_s)
+    best = None
+    for m in range(SYNTH_M_MAX + 1):
+        x = min(max(round((half - 3) / (m + 1) - 3), 1), X_MAX)
+        w = m << 12 | x
+        err = abs(synth_half(w) - half)
+        if best is None or err < best[0] - 1e-9:
+            best = (err, w)
+    if best[0] / half > 0.015:               # a quarter of a semitone
+        raise ValueError(f"note {note} is out of range at this tick")
+    return best[1]
+
+
+def synth_config(clkdiv=TONE_DIV, pin=SPEAKER_PIN):
+    return EngineConfig(clkdiv=clkdiv, side_base=pin)
+
+
+async def midi_synth_start(b, synth_prog, rx_prog, synth_cfg=None, rx_cfg=None, pin=SPEAKER_PIN):
     await b.write(A_PIN_OE, 1 << pin)
     await b.setup(0, rx_prog, 0, rx_cfg or midi_rx_config())
-    await b.setup(1, tone_prog, 0, tone_cfg or tone_config(pin=pin))
+    await b.setup(1, synth_prog, 0, synth_cfg or synth_config(pin=pin))
     await b.start(3)
 
 
 async def midi_synth_play(b, note, tick_s=(TONE_DIV + 1) / CLK_HZ):
-    """Switch the synth to `note` (None = silence)."""
-    await b.push(1, word(note, 1, tick_s))
+    """Switch the synth to `note` (None = silence). Returns False, doing
+    nothing, while the previous note is still waiting for its wave to end
+    (flag 0 still set): try again later. This keeps at most one word in the
+    FIFO, so the synth always plays the newest note."""
+    if await b.read(A_FLAGS) >> NEXT & 1:
+        return False
+    await b.push(1, synth_word(note, tick_s))
     await b.write(A_FLAG_SET, 1 << NEXT)
+    return True

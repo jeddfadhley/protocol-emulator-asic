@@ -24,7 +24,7 @@ Command line (run from the sw/ directory):
     python3 -m pemu.fpga lockstep           compare the board with the Python model, tick by tick
     python3 -m pemu.fpga vga ["TEXT"]       a picture on the Basys 3 VGA port (640x480)
     python3 -m pemu.fpga music              play a tune on a speaker on Pmod JA10
-    python3 -m pemu.fpga midi               a MIDI keyboard on Pmod JC3 plays the speaker
+    python3 -m pemu.fpga midi               a MIDI keyboard on Pmod JC3 plays the speaker (chords too)
 
 Add --port /dev/tty.usbserial-XXXX1 if auto-detection picks the wrong port.
 pyserial (pip3 install pyserial) is only needed to talk to real hardware.
@@ -426,29 +426,30 @@ def cmd_midi(args, out):
     chip = pemu_board.Pemu(link)
     chip.check()
     bench = _Bench(chip)
-    _run(music.midi_synth_start(bench, program("tone"), program("uart_rx")))
-    parser, voice = music.MidiParser(), music.MonoVoice()
+    _run(music.midi_synth_start(bench, program("synth"), program("uart_rx")))
+    parser, arp = music.MidiParser(), music.Arpeggiator(step_s=args.arp_ms / 1000)
     print("MIDI synth: MIDI in on PEMU pin 11 (Pmod JC3), speaker on pin 7 (Pmod JA10). "
-          "Ctrl-C to stop.", file=out, flush=True)
-    polls = 0
+          "Hold several keys for a chord. Ctrl-C to stop.", file=out, flush=True)
+    polls, sent = 0, None
     try:
         while args.polls is None or polls < args.polls:
             polls += 1
             level = (chip.status(0) >> 8) & 7
+            changed = False
             for _ in range(level):
                 for ev in parser.feed(chip.read(pemu_board.engine_base(0) + pemu_board.R_FIFO)):
-                    note = voice.update(ev)
-                    if note is False:
-                        continue
-                    try:
-                        _run(music.midi_synth_play(bench, note))
-                        print(f"note {note}" if note is not None else "quiet",
-                              file=out, flush=True)
-                    except ValueError:
-                        print(f"note {note} is too low for the synth", file=out, flush=True)
+                    arp.update(ev, time.monotonic())
+                    changed = True
+            if changed:
+                keys = " ".join(music.note_name(n) for n in sorted(arp.held))
+                print(f"playing {keys}" if keys else "quiet", file=out, flush=True)
+            note = arp.note(time.monotonic())
+            if note != sent and _run(music.midi_synth_play(bench, note)):
+                sent = note
     except KeyboardInterrupt:
         pass
-    _run(music.midi_synth_play(bench, None))
+    while not _run(music.midi_synth_play(bench, None)):
+        pass
     return 0
 
 
@@ -512,6 +513,8 @@ def build_parser():
     mu.set_defaults(func=cmd_music)
     mi = sub.add_parser("midi", help="MIDI synth: MIDI in on Pmod JC3, speaker on Pmod JA10")
     mi.add_argument("--polls", type=int, default=None, help="stop after this many polls")
+    mi.add_argument("--arp-ms", type=float, default=25,
+                    help="with several keys held, how long each note of the chord sounds")
     mi.set_defaults(func=cmd_midi)
     return p
 
